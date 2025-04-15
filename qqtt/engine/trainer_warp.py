@@ -1141,7 +1141,7 @@ class InvPhyTrainerWarp:
 
             for static_mesh in self.static_meshes:
                 vis.add_geometry(static_mesh)
-            
+
             x_vis = wp.to_torch(
                 self.simulator.wp_states[0].wp_x, requires_grad=False
             ).clone()
@@ -1152,7 +1152,7 @@ class InvPhyTrainerWarp:
             vis.add_geometry(object_pcd)
 
             # o3d.visualization.draw_geometries([object_pcd] + self.static_meshes)
-            
+
             view_control = vis.get_view_control()
             camera_params = o3d.camera.PinholeCameraParameters()
             intrinsic_parameter = o3d.camera.PinholeCameraIntrinsic(
@@ -1244,7 +1244,9 @@ class InvPhyTrainerWarp:
                 vis.update_geometry(object_pcd)
                 vis.poll_events()
                 vis.update_renderer()
-                static_image = np.asarray(vis.capture_screen_float_buffer(do_render=True))
+                static_image = np.asarray(
+                    vis.capture_screen_float_buffer(do_render=True)
+                )
                 # cv2.imshow("test", static_image)
                 # cv2.waitKey(1)
                 static_image = (static_image * 255).astype(np.uint8)
@@ -1387,6 +1389,14 @@ class InvPhyTrainerWarp:
                     print(
                         f"{key.capitalize()}: {avg_time*1000:.2f} ms ({percentage:.1f}%)"
                     )
+                total_energy = calculate_energy(
+                    prev_x,
+                    spring_Y,
+                    self.init_springs,
+                    self.init_rest_lengths,
+                    num_object_springs,
+                )
+                print(f"Energy: {total_energy:.2f}")
 
         listener.stop()
 
@@ -2230,3 +2240,26 @@ def compute_effective_stiffness(points, springs, Y, rest_lengths, device):
         block = K_dense[3 * i : 3 * i + 3, 3 * i : 3 * i + 3]
         stiffness_map[i] = torch.norm(block, p="fro")
     return stiffness_map
+
+
+def calculate_energy(x, spring_Y, springs, rest_lengths, num_object_springs):
+    object_springs = springs[:num_object_springs]
+    object_rest_lengths = rest_lengths[:num_object_springs]
+    clamp_spring_Y = torch.clamp(
+        spring_Y[:num_object_springs], min=cfg.spring_Y_min, max=cfg.spring_Y_max
+    )
+
+    with torch.no_grad():
+        # Calculate the energy of the springs
+        x1 = x[object_springs[:, 0]]
+        x2 = x[object_springs[:, 1]]
+
+        dis = x2 - x1
+        dis_len = torch.norm(dis, dim=1)
+
+        # Hooke's law: 0.5 * k * (|x2 - x1| - rest_length)^2
+        stretch = dis_len - object_rest_lengths
+        energy = 0.5 * clamp_spring_Y * (stretch ** 2)
+
+        total_energy = energy.sum()
+        return total_energy
