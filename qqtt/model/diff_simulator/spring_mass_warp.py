@@ -830,16 +830,23 @@ class SpringMassSystemWarp:
         )
 
         # Load the static meshes
-        self.static_meshes = []
+        self.static_mesh_warp = None
         if static_meshes is not None:
+            vertices = []
+            indices = []
+            offset = 0
             for static_mesh in static_meshes:
-                vertices = np.array(static_mesh.vertices, dtype=np.float32)
-                indices = np.array(static_mesh.triangles, dtype=np.int32).flatten()
-                static_mesh_warp = wp.Mesh(
-                    points=wp.array(vertices, dtype=wp.vec3, device=self.device),
-                    indices=wp.array(indices, dtype=int, device=self.device),
-                )
-                self.static_meshes.append(static_mesh_warp)
+                vertex = np.array(static_mesh.vertices, dtype=np.float32)
+                index = np.array(static_mesh.triangles, dtype=np.int32).flatten()
+                vertices.append(vertex)
+                indices.append(index + offset)
+                offset += vertex.shape[0]
+            vertices = np.concatenate(vertices, axis=0)
+            indices = np.concatenate(indices, axis=0)
+            self.static_mesh_warp = wp.Mesh(
+                points=wp.array(vertices, dtype=wp.vec3, device=self.device),
+                indices=wp.array(indices, dtype=int, device=self.device),
+            )
 
         # Create the CUDA graph to acclerate
         if cfg.use_graph:
@@ -1093,14 +1100,14 @@ class SpringMassSystemWarp:
 
             # This function is not promised to be differentiable for now
             # Need to further check and update
-            for j in range(len(self.static_meshes)):
+            if self.static_mesh_warp is not None:
                 wp.launch(
                     kernel=mesh_collision,
                     dim=self.num_object_points,
                     inputs=[
                         self.wp_states[i].wp_x,
                         self.wp_states[i].wp_v_before_ground,
-                        self.static_meshes[j].id,
+                        self.static_mesh_warp.id,
                         self.wp_collide_elas,
                         self.wp_collide_fric,
                         self.dt,
