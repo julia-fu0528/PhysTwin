@@ -1,6 +1,7 @@
 import torch
 from qqtt.utils import logger, cfg
 import warp as wp
+import numpy as np
 
 wp.init()
 wp.set_device("cuda:0")
@@ -296,6 +297,44 @@ def object_collision(
         v_new[tid] = v1 - J_average / m1
     else:
         v_new[tid] = v1
+
+
+# This function is not validated to be differentiable yet
+@wp.kernel(enable_backward=False)
+def mesh_collision(
+    x: wp.array(dtype=wp.vec3),
+    v: wp.array(dtype=wp.vec3),
+    mesh: wp.uint64,
+    dt: float,
+    x_new: wp.array(dtype=wp.vec3),
+    v_new: wp.array(dtype=wp.vec3),
+):
+    tid = wp.tid()
+
+    x0 = x[tid]
+    v0 = v[tid]
+
+    next_x = x0 + v0 * dt
+    query = wp.mesh_query_point_sign_winding_number(
+        mesh, next_x, max_dist=0.02, accuracy=3.0, threshold=0.6
+    )
+    # query = wp.mesh_query_point_sign_normal(
+    #     mesh, next_x, max_dist=0.01
+    # )
+    if query.result:
+        p = wp.mesh_eval_position(mesh, query.face, query.u, query.v)
+        delta = next_x - p
+        dist = wp.length(delta) * query.sign
+        err = dist - 0.001
+
+        if err < 0.0:
+            n = wp.normalize(delta) * query.sign
+            next_x = next_x - n * err
+
+    v1 = (next_x - x0) / dt
+
+    x_new[tid] = next_x
+    v_new[tid] = v1
 
 
 @wp.kernel
@@ -596,6 +635,7 @@ class SpringMassSystemWarp:
         gt_object_motions_valid=None,
         self_collision=False,
         disable_backward=False,
+        static_meshes=None,
     ):
         logger.info(f"[SIMULATION]: Initialize the Spring-Mass System")
         self.device = cfg.device
@@ -764,6 +804,18 @@ class SpringMassSystemWarp:
             ),
             requires_grad=cfg.collision_learn,
         )
+
+        # Load the static meshes
+        self.static_meshes = []
+        if static_meshes is not None:
+            for static_mesh in static_meshes:
+                vertices = np.array(static_mesh.vertices, dtype=np.float32)
+                indices = np.array(static_mesh.triangles, dtype=np.int32).flatten()
+                static_mesh_warp = wp.Mesh(
+                    points=wp.array(vertices, dtype=wp.vec3, device=self.device),
+                    indices=wp.array(indices, dtype=int, device=self.device),
+                )
+                self.static_meshes.append(static_mesh_warp)
 
         # Create the CUDA graph to acclerate
         if cfg.use_graph:
@@ -1013,6 +1065,24 @@ class SpringMassSystemWarp:
                         self.wp_collision_number,
                     ],
                     outputs=[self.wp_states[i].wp_v_before_ground],
+                )
+
+            # This function is not promised to be differentiable for now
+            # Need to further check and update
+            for j in range(len(self.static_meshes)):
+                wp.launch(
+                    kernel=mesh_collision,
+                    dim=self.num_object_points,
+                    inputs=[
+                        self.wp_states[i].wp_x,
+                        self.wp_states[i].wp_v_before_ground,
+                        self.static_meshes[j].id,
+                        self.dt,
+                    ],
+                    outputs=[
+                        self.wp_states[i].wp_x,
+                        self.wp_states[i].wp_v_before_ground,
+                    ],
                 )
 
             # Update the x and v

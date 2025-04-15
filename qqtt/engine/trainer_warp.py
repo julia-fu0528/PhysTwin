@@ -52,6 +52,7 @@ class InvPhyTrainerWarp:
         velocity_path=None,
         pure_inference_mode=False,
         device="cuda:0",
+        static_meshes=None,
     ):
         cfg.data_path = data_path
         cfg.base_dir = base_dir
@@ -148,7 +149,9 @@ class InvPhyTrainerWarp:
             gt_object_visibilities=self.object_visibilities,
             gt_object_motions_valid=self.object_motions_valid,
             self_collision=cfg.self_collision,
+            static_meshes=static_meshes,
         )
+        self.static_meshes = static_meshes
 
         if not pure_inference_mode:
             self.optimizer = torch.optim.Adam(
@@ -1130,6 +1133,40 @@ class InvPhyTrainerWarp:
         frame_count = 0
 
         ############## End Temporary timer ##############
+        if self.static_meshes is not None:
+            vis = o3d.visualization.Visualizer()
+            vis.create_window(visible=False, width=width, height=height)
+            render_option = vis.get_render_option()
+            render_option.point_size = 10.0
+
+            for static_mesh in self.static_meshes:
+                vis.add_geometry(static_mesh)
+            
+            x_vis = wp.to_torch(
+                self.simulator.wp_states[0].wp_x, requires_grad=False
+            ).clone()
+            object_pcd = o3d.geometry.PointCloud()
+            object_pcd.points = o3d.utility.Vector3dVector(x_vis.cpu().numpy())
+            # object_pcd.paint_uniform_color([1, 0, 0])
+            object_pcd.paint_uniform_color([1, 1, 1])
+            vis.add_geometry(object_pcd)
+
+            # o3d.visualization.draw_geometries([object_pcd] + self.static_meshes)
+            
+            view_control = vis.get_view_control()
+            camera_params = o3d.camera.PinholeCameraParameters()
+            intrinsic_parameter = o3d.camera.PinholeCameraIntrinsic(
+                width, height, intrinsic
+            )
+            camera_params.intrinsic = intrinsic_parameter
+            camera_params.extrinsic = w2c
+            view_control.convert_from_pinhole_camera_parameters(
+                camera_params, allow_arbitrary=True
+            )
+
+            # vis_image = np.asarray(vis.capture_screen_float_buffer(do_render=True))
+            # cv2.imshow("test", vis_image)
+            # cv2.waitKey(0)
 
         while True:
 
@@ -1199,6 +1236,20 @@ class InvPhyTrainerWarp:
             rgb = image[..., :3] * 255
             frame = alpha * rgb + (1 - alpha) * frame
             frame = frame.astype(np.uint8)
+
+            if self.static_meshes is not None:
+                # Update with the visualziation of static meshes
+                x_vis = x.clone()
+                object_pcd.points = o3d.utility.Vector3dVector(x_vis.cpu().numpy())
+                vis.update_geometry(object_pcd)
+                vis.poll_events()
+                vis.update_renderer()
+                static_image = np.asarray(vis.capture_screen_float_buffer(do_render=True))
+                # cv2.imshow("test", static_image)
+                # cv2.waitKey(1)
+                static_image = (static_image * 255).astype(np.uint8)
+                static_vis_mask = np.all(static_image == [255, 255, 255], axis=-1)
+                frame[~static_vis_mask] = static_image[~static_vis_mask]
 
             frame = self.update_frame(frame, self.pressed_keys)
 
