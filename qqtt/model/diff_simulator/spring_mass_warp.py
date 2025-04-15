@@ -305,6 +305,8 @@ def mesh_collision(
     x: wp.array(dtype=wp.vec3),
     v: wp.array(dtype=wp.vec3),
     mesh: wp.uint64,
+    collide_elas: wp.array(dtype=float),
+    collide_fric: wp.array(dtype=float),
     dt: float,
     x_new: wp.array(dtype=wp.vec3),
     v_new: wp.array(dtype=wp.vec3),
@@ -325,16 +327,38 @@ def mesh_collision(
         p = wp.mesh_eval_position(mesh, query.face, query.u, query.v)
         delta = next_x - p
         dist = wp.length(delta) * query.sign
-        err = dist - 0.001
+        err = dist - 0.01
 
         if err < 0.0:
-            n = wp.normalize(delta) * query.sign
-            next_x = next_x - n * err
+            normal = wp.normalize(delta) * query.sign
 
-    v1 = (next_x - x0) / dt
+            v_normal = wp.dot(v0, normal) * normal
+            v_tao = v0 - v_normal
+            v_normal_length = wp.length(v_normal)
+            v_tao_length = wp.max(wp.length(v_tao), 1e-6)
+            clamp_collide_elas = wp.clamp(collide_elas[0], low=0.0, high=1.0)
+            clamp_collide_fric = wp.clamp(collide_fric[0], low=0.0, high=2.0)
+            
+            v_normal_new = -clamp_collide_elas * v_normal
+            a = wp.max(
+                0.0,
+                1.0
+                - clamp_collide_fric
+                * (1.0 + clamp_collide_elas)
+                * v_normal_length
+                / v_tao_length,
+            )
+            v_tao_new = a * v_tao
+
+            next_v = v_normal_new + v_tao_new
+            next_x = next_x - normal * err
+        else:
+            next_v = v0
+    else:
+        next_v = v0
 
     x_new[tid] = next_x
-    v_new[tid] = v1
+    v_new[tid] = next_v
 
 
 @wp.kernel
@@ -1077,6 +1101,8 @@ class SpringMassSystemWarp:
                         self.wp_states[i].wp_x,
                         self.wp_states[i].wp_v_before_ground,
                         self.static_meshes[j].id,
+                        self.wp_collide_elas,
+                        self.wp_collide_fric,
                         self.dt,
                     ],
                     outputs=[
