@@ -122,12 +122,25 @@ class InvPhyTrainerWarp:
             mask=self.init_masks,
         )
 
-        self.static_meshes = static_meshes
-        # Extract the dynamic meshes from the robot
-        self.robot = robot
-        finger_meshes = self.robot.get_finger_mesh(1.0)
-        self.dynamic_meshes = finger_meshes
-        self.num_dynamic = len(self.dynamic_meshes)
+        if static_meshes is not None:
+            self.static_meshes = static_meshes
+            if robot is not None:
+                # Extract the dynamic meshes from the robot
+                self.robot = robot
+                finger_meshes = self.robot.get_finger_mesh(1.0)
+                self.dynamic_meshes = finger_meshes
+                self.num_dynamic = len(self.dynamic_meshes)
+                dynamic_vertices = [
+                    np.asarray(finger_mesh.vertices) for finger_mesh in finger_meshes
+                ]
+                new_vertices = np.concatenate(dynamic_vertices, axis=0)
+                new_vertices = torch.tensor(
+                    new_vertices, dtype=torch.float32, device=cfg.device
+                )
+                self.dynamic_points = new_vertices
+            else:
+                self.dynamic_meshes = []
+                self.dynamic_points = None
 
         self.simulator = SpringMassSystemWarp(
             self.init_vertices,
@@ -157,7 +170,6 @@ class InvPhyTrainerWarp:
             gt_object_visibilities=self.object_visibilities,
             gt_object_motions_valid=self.object_motions_valid,
             self_collision=cfg.self_collision,
-            static_meshes=self.dynamic_meshes + static_meshes,
         )
 
         if not pure_inference_mode:
@@ -1462,6 +1474,7 @@ class InvPhyTrainerWarp:
             gt_object_motions_valid=self.object_motions_valid,
             self_collision=cfg.self_collision,
             static_meshes=self.dynamic_meshes + self.static_meshes,
+            dynamic_points=self.dynamic_points,
         )
 
         self.simulator.set_spring_Y(torch.log(spring_Y).detach().clone())
@@ -1642,6 +1655,7 @@ class InvPhyTrainerWarp:
             np.asarray(finger_mesh.vertices) + accumulate_change[0]
             for finger_mesh in self.dynamic_meshes
         ]
+        current_dynamic_points = self.dynamic_points
 
         while True:
 
@@ -1658,6 +1672,7 @@ class InvPhyTrainerWarp:
             collision_forces = wp.to_torch(
                 self.simulator.collision_forces, requires_grad=False
             )[: self.num_dynamic]
+            print(collision_forces)
             # Set the intial state for the next step
             self.simulator.set_init_state(
                 self.simulator.wp_states[-1].wp_x,
@@ -1817,8 +1832,12 @@ class InvPhyTrainerWarp:
             new_vertices = torch.tensor(
                 new_vertices, dtype=torch.float32, device=cfg.device
             )
+            prev_dynamic_points = current_dynamic_points
+            current_dynamic_points = new_vertices
 
-            self.simulator.update_meshes(new_vertices)
+            self.simulator.set_mesh_interactive(
+                prev_dynamic_points, current_dynamic_points
+            )
 
             ############### Temporary timer ###############
             # Total loop time

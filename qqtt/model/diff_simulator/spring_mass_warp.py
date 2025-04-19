@@ -46,12 +46,19 @@ class State:
 @wp.kernel(enable_backward=False)
 def set_mesh_points(
     points: wp.array(dtype=wp.vec3),
-    new_dynamic_points: wp.array(dtype=wp.vec3),
+    original_dynamic_points: wp.array(dtype=wp.vec3),
+    target_dynamic_points: wp.array(dtype=wp.vec3),
     num_dynamic: int,
+    num_substeps: int,
+    step: int,
 ):
     tid = wp.tid()
     if tid < num_dynamic:
-        points[tid] = new_dynamic_points[tid]
+        t = float(step + 1) / float(num_substeps)
+        points[tid] = (
+            original_dynamic_points[tid]
+            + (target_dynamic_points[tid] - original_dynamic_points[tid]) * t
+        )
 
 
 @wp.kernel(enable_backward=False)
@@ -677,6 +684,7 @@ class SpringMassSystemWarp:
         self_collision=False,
         disable_backward=False,
         static_meshes=None,
+        dynamic_points=None,
     ):
         logger.info(f"[SIMULATION]: Initialize the Spring-Mass System")
         self.device = cfg.device
@@ -887,6 +895,13 @@ class SpringMassSystemWarp:
                 device=self.device,
                 requires_grad=False,
             )
+            self.wp_original_dynamic_points = wp.from_torch(
+                dynamic_points.clone(), dtype=wp.vec3, requires_grad=False
+            )
+            self.wp_target_dynamic_points = wp.from_torch(
+                dynamic_points.clone(), dtype=wp.vec3, requires_grad=False
+            )
+            self.num_dynamic = len(dynamic_points)
 
         # Create the CUDA graph to acclerate
         if cfg.use_graph:
@@ -1046,18 +1061,20 @@ class SpringMassSystemWarp:
             outputs=[self.prev_acc],
         )
 
-    def update_meshes(self, dynamic_points):
-        if self.static_mesh_warp is not None:
-            wp.launch(
-                set_mesh_points,
-                dim=len(self.static_mesh_warp.points),
-                inputs=[
-                    self.static_mesh_warp.points,
-                    dynamic_points,
-                    dynamic_points.shape[0],
-                ],
-            )
-            self.static_mesh_warp.refit()
+    def set_mesh_interactive(self, last_dynamic_points, dynamic_points):
+        # Set the controller points
+        wp.launch(
+            copy_vec3,
+            dim=len(dynamic_points),
+            inputs=[last_dynamic_points],
+            outputs=[self.wp_original_dynamic_points],
+        )
+        wp.launch(
+            copy_vec3,
+            dim=len(dynamic_points),
+            inputs=[dynamic_points],
+            outputs=[self.wp_target_dynamic_points],
+        )
 
     def update_collision_graph(self):
         assert self.object_collision_flag
@@ -1154,6 +1171,19 @@ class SpringMassSystemWarp:
             # This function is not promised to be differentiable for now
             # Need to further check and update
             if self.static_mesh_warp is not None:
+                wp.launch(
+                    set_mesh_points,
+                    dim=len(self.static_mesh_warp.points),
+                    inputs=[
+                        self.static_mesh_warp.points,
+                        self.wp_original_dynamic_points,
+                        self.wp_target_dynamic_points,
+                        self.num_dynamic,
+                        self.num_substeps,
+                        i,
+                    ],
+                )
+                self.static_mesh_warp.refit()
                 self.collision_forces.zero_()
                 wp.launch(
                     kernel=mesh_collision,
