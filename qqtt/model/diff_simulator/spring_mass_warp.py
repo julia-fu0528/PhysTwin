@@ -44,6 +44,17 @@ class State:
 
 
 @wp.kernel(enable_backward=False)
+def set_mesh_points(
+    points: wp.array(dtype=wp.vec3),
+    new_dynamic_points: wp.array(dtype=wp.vec3),
+    num_dynamic: int,
+):
+    tid = wp.tid()
+    if tid < num_dynamic:
+        points[tid] = new_dynamic_points[tid]
+
+
+@wp.kernel(enable_backward=False)
 def copy_vec3(data: wp.array(dtype=wp.vec3), origin: wp.array(dtype=wp.vec3)):
     tid = wp.tid()
     origin[tid] = data[tid]
@@ -308,8 +319,10 @@ def mesh_collision(
     collide_elas: wp.array(dtype=float),
     collide_fric: wp.array(dtype=float),
     dt: float,
+    face_map: wp.array(dtype=int),
     x_new: wp.array(dtype=wp.vec3),
     v_new: wp.array(dtype=wp.vec3),
+    collision_forces: wp.array(dtype=wp.vec3),
 ):
     tid = wp.tid()
 
@@ -338,7 +351,7 @@ def mesh_collision(
             v_tao_length = wp.max(wp.length(v_tao), 1e-6)
             clamp_collide_elas = wp.clamp(collide_elas[0], low=0.0, high=1.0)
             clamp_collide_fric = wp.clamp(collide_fric[0], low=0.0, high=2.0)
-            
+
             v_normal_new = -clamp_collide_elas * v_normal
             a = wp.max(
                 0.0,
@@ -352,6 +365,10 @@ def mesh_collision(
 
             next_v = v_normal_new + v_tao_new
             next_x = next_x - normal * err
+
+            # Only calculate the force in the normal direction
+            delta_v_normal = v_normal_new - v_normal
+            wp.atomic_add(collision_forces, face_map[query.face], delta_v_normal / dt)
         else:
             next_v = v0
     else:
@@ -777,12 +794,17 @@ class SpringMassSystemWarp:
             self.num_valid_visibilities = int(self.gt_object_visibilities[1].sum())
             self.num_valid_motions = int(self.gt_object_motions_valid[0].sum())
 
-            self.wp_original_control_point = wp.from_torch(
-                self.controller_points[0].clone(), dtype=wp.vec3, requires_grad=False
-            )
-            self.wp_target_control_point = wp.from_torch(
-                self.controller_points[1].clone(), dtype=wp.vec3, requires_grad=False
-            )
+            if self.controller_points is not None:
+                self.wp_original_control_point = wp.from_torch(
+                    self.controller_points[0].clone(),
+                    dtype=wp.vec3,
+                    requires_grad=False,
+                )
+                self.wp_target_control_point = wp.from_torch(
+                    self.controller_points[1].clone(),
+                    dtype=wp.vec3,
+                    requires_grad=False,
+                )
 
             self.chamfer_loss = wp.zeros(1, dtype=wp.float32, requires_grad=True)
             self.track_loss = wp.zeros(1, dtype=wp.float32, requires_grad=True)
@@ -834,6 +856,8 @@ class SpringMassSystemWarp:
         if static_meshes is not None:
             vertices = []
             indices = []
+            face_map = []
+            mesh_index = 0
             offset = 0
             for static_mesh in static_meshes:
                 vertex = np.array(static_mesh.vertices, dtype=np.float32)
@@ -841,11 +865,27 @@ class SpringMassSystemWarp:
                 vertices.append(vertex)
                 indices.append(index + offset)
                 offset += vertex.shape[0]
+                face_map.append(
+                    np.ones(int(index.shape[0] / 3), dtype=np.int32) * mesh_index
+                )
+                mesh_index += 1
             vertices = np.concatenate(vertices, axis=0)
             indices = np.concatenate(indices, axis=0)
             self.static_mesh_warp = wp.Mesh(
                 points=wp.array(vertices, dtype=wp.vec3, device=self.device),
                 indices=wp.array(indices, dtype=int, device=self.device),
+            )
+            self.face_map = wp.array(
+                np.concatenate(face_map, axis=0),
+                dtype=int,
+                device=self.device,
+                requires_grad=False,
+            )
+            self.collision_forces = wp.array(
+                np.zeros([len(static_meshes), 3], dtype=np.float32),
+                dtype=wp.vec3,
+                device=self.device,
+                requires_grad=False,
             )
 
         # Create the CUDA graph to acclerate
@@ -1006,6 +1046,19 @@ class SpringMassSystemWarp:
             outputs=[self.prev_acc],
         )
 
+    def update_meshes(self, dynamic_points):
+        if self.static_mesh_warp is not None:
+            wp.launch(
+                set_mesh_points,
+                dim=len(self.static_mesh_warp.points),
+                inputs=[
+                    self.static_mesh_warp.points,
+                    dynamic_points,
+                    dynamic_points.shape[0],
+                ],
+            )
+            self.static_mesh_warp.refit()
+
     def update_collision_graph(self):
         assert self.object_collision_flag
         self.collision_grid.build(self.wp_states[0].wp_x, self.collision_dist * 5.0)
@@ -1101,6 +1154,7 @@ class SpringMassSystemWarp:
             # This function is not promised to be differentiable for now
             # Need to further check and update
             if self.static_mesh_warp is not None:
+                self.collision_forces.zero_()
                 wp.launch(
                     kernel=mesh_collision,
                     dim=self.num_object_points,
@@ -1111,10 +1165,12 @@ class SpringMassSystemWarp:
                         self.wp_collide_elas,
                         self.wp_collide_fric,
                         self.dt,
+                        self.face_map,
                     ],
                     outputs=[
                         self.wp_states[i].wp_x,
                         self.wp_states[i].wp_v_before_ground,
+                        self.collision_forces,
                     ],
                 )
 
