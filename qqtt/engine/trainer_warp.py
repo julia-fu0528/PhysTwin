@@ -591,9 +591,19 @@ class InvPhyTrainerWarp:
         target_change = np.zeros((self.n_ctrl_parts, 3))
         for key in self.pressed_keys:
             if key in self.key_mappings:
-                idx, change = self.key_mappings[key]
-                target_change[idx] += change
+                if key == "n" or key == "m":
+                    pass
+                else:
+                    idx, change = self.key_mappings[key]
+                    target_change[idx] += change
         return target_change
+
+    def get_finger_change(self):
+        for key in self.pressed_keys:
+            if key in self.key_mappings:
+                if key == "n" or key == "m":
+                    return self.key_mappings[key]
+        return 0.0
 
     def init_control_ui(self):
 
@@ -1540,6 +1550,9 @@ class InvPhyTrainerWarp:
             "l": (1, np.array([0, 0.005, 0]) * self.inv_ctrl),
             "o": (1, np.array([0, 0, 0.005])),
             "u": (1, np.array([0, 0, -0.005])),
+            # Set the finger
+            "n": 0.05,
+            "m": -0.05,
         }
         self.pressed_keys = set()
         self.w2c = w2c
@@ -1629,8 +1642,8 @@ class InvPhyTrainerWarp:
             ).clone()
             object_pcd = o3d.geometry.PointCloud()
             object_pcd.points = o3d.utility.Vector3dVector(x_vis.cpu().numpy())
-            # object_pcd.paint_uniform_color([1, 0, 0])
-            object_pcd.paint_uniform_color([1, 1, 1])
+            object_pcd.paint_uniform_color([1, 0, 0])
+            # object_pcd.paint_uniform_color([1, 1, 1])
             vis.add_geometry(object_pcd)
 
             # o3d.visualization.draw_geometries([object_pcd] + self.static_meshes)
@@ -1656,6 +1669,7 @@ class InvPhyTrainerWarp:
             for finger_mesh in self.dynamic_meshes
         ]
         current_dynamic_points = self.dynamic_points
+        current_finger = 1.0
 
         while True:
 
@@ -1822,8 +1836,12 @@ class InvPhyTrainerWarp:
             prev_x = x.clone()
 
             target_change = self.get_target_change()
+            finger_change = self.get_finger_change()
+            current_finger += finger_change
+            current_finger = max(0.0, min(1.0, current_finger))
+            
             accumulate_change += target_change
-            finger_meshes = self.robot.get_finger_mesh(1.0)
+            finger_meshes = self.robot.get_finger_mesh(current_finger)
             self.dynamic_vertices = [
                 np.asarray(finger_mesh.vertices) + accumulate_change[0]
                 for finger_mesh in finger_meshes
@@ -1835,8 +1853,10 @@ class InvPhyTrainerWarp:
             prev_dynamic_points = current_dynamic_points
             current_dynamic_points = new_vertices
 
+            dynamic_velocity = torch.tensor(target_change[0] / (2 * cfg.dt * cfg.num_substeps), dtype=torch.float32, device=cfg.device)
+            # print(dynamic_velocity)
             self.simulator.set_mesh_interactive(
-                prev_dynamic_points, current_dynamic_points
+                prev_dynamic_points, current_dynamic_points, dynamic_velocity
             )
 
             ############### Temporary timer ###############

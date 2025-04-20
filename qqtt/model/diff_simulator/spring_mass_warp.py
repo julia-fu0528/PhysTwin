@@ -327,6 +327,7 @@ def mesh_collision(
     collide_fric: wp.array(dtype=float),
     dt: float,
     face_map: wp.array(dtype=int),
+    dynamic_velocity: wp.array(dtype=wp.vec3),
     x_new: wp.array(dtype=wp.vec3),
     v_new: wp.array(dtype=wp.vec3),
     collision_forces: wp.array(dtype=wp.vec3),
@@ -347,10 +348,12 @@ def mesh_collision(
         p = wp.mesh_eval_position(mesh, query.face, query.u, query.v)
         delta = next_x - p
         dist = wp.length(delta) * query.sign
-        err = dist - 0.01
+        err = dist
 
         if err < 0.0:
             normal = wp.normalize(delta) * query.sign
+
+            v0 = v0 - dynamic_velocity[0]
 
             v_normal = wp.dot(v0, normal) * normal
             v_tao = v0 - v_normal
@@ -360,17 +363,28 @@ def mesh_collision(
             clamp_collide_fric = wp.clamp(collide_fric[0], low=0.0, high=2.0)
 
             v_normal_new = -clamp_collide_elas * v_normal
-            a = wp.max(
-                0.0,
-                1.0
-                - clamp_collide_fric
-                * (1.0 + clamp_collide_elas)
-                * v_normal_length
-                / v_tao_length,
-            )
-            v_tao_new = a * v_tao
+
+            delta_v_normal = v_normal_new - v_normal
+
+            impulse_normal = wp.length(delta_v_normal)
+            impulse_tao = wp.length(v_tao)
+
+            if impulse_tao <= clamp_collide_fric * impulse_normal:
+                v_tao_new = wp.vec3(0.0, 0.0, 0.0)
+            else:
+                a = wp.max(
+                    0.0,
+                    1.0
+                    - clamp_collide_fric
+                    * (1.0 + clamp_collide_elas)
+                    * v_normal_length
+                    / v_tao_length,
+                )
+                v_tao_new = a * v_tao
 
             next_v = v_normal_new + v_tao_new
+            next_v += dynamic_velocity[0]
+
             next_x = next_x - normal * err
 
             # Only calculate the force in the normal direction
@@ -903,6 +917,8 @@ class SpringMassSystemWarp:
             )
             self.num_dynamic = len(dynamic_points)
 
+            self.wp_dynamic_velocity = wp.zeros((1), dtype=wp.vec3, requires_grad=False)
+
         # Create the CUDA graph to acclerate
         if cfg.use_graph:
             if cfg.data_type == "real":
@@ -1061,7 +1077,9 @@ class SpringMassSystemWarp:
             outputs=[self.prev_acc],
         )
 
-    def set_mesh_interactive(self, last_dynamic_points, dynamic_points):
+    def set_mesh_interactive(
+        self, last_dynamic_points, dynamic_points, dynamic_velocity
+    ):
         # Set the controller points
         wp.launch(
             copy_vec3,
@@ -1074,6 +1092,13 @@ class SpringMassSystemWarp:
             dim=len(dynamic_points),
             inputs=[dynamic_points],
             outputs=[self.wp_target_dynamic_points],
+        )
+
+        wp.launch(
+            copy_vec3,
+            dim=1,
+            inputs=[dynamic_velocity],
+            outputs=[self.wp_dynamic_velocity],
         )
 
     def update_collision_graph(self):
@@ -1196,6 +1221,7 @@ class SpringMassSystemWarp:
                         self.wp_collide_fric,
                         self.dt,
                         self.face_map,
+                        self.wp_dynamic_velocity,
                     ],
                     outputs=[
                         self.wp_states[i].wp_x,
