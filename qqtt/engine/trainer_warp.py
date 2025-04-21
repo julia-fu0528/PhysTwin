@@ -1668,8 +1668,13 @@ class InvPhyTrainerWarp:
             np.asarray(finger_mesh.vertices) + accumulate_change[0]
             for finger_mesh in self.dynamic_meshes
         ]
+
+        current_force_judge = torch.tensor(
+            [[-1, 0, 0], [1, 0, 0]], dtype=torch.float32, device=cfg.device
+        )
         current_dynamic_points = self.dynamic_points
         current_finger = 1.0
+        close_flag = True
 
         while True:
 
@@ -1686,7 +1691,16 @@ class InvPhyTrainerWarp:
             collision_forces = wp.to_torch(
                 self.simulator.collision_forces, requires_grad=False
             )[: self.num_dynamic]
-            print(collision_forces)
+            filter_forces = torch.einsum(
+                "ij,ij->i", collision_forces, current_force_judge
+            )
+            if torch.all(filter_forces > 1e4):
+                close_flag = False
+            else:
+                close_flag = True
+            
+            print(filter_forces)
+
             # Set the intial state for the next step
             self.simulator.set_init_state(
                 self.simulator.wp_states[-1].wp_x,
@@ -1837,9 +1851,11 @@ class InvPhyTrainerWarp:
 
             target_change = self.get_target_change()
             finger_change = self.get_finger_change()
+            if finger_change < 0 and close_flag == False:
+                finger_change = 0
             current_finger += finger_change
             current_finger = max(0.0, min(1.0, current_finger))
-            
+
             accumulate_change += target_change
             finger_meshes = self.robot.get_finger_mesh(current_finger)
             self.dynamic_vertices = [
@@ -1853,7 +1869,17 @@ class InvPhyTrainerWarp:
             prev_dynamic_points = current_dynamic_points
             current_dynamic_points = new_vertices
 
-            dynamic_velocity = torch.tensor(target_change[0] / (2 * cfg.dt * cfg.num_substeps), dtype=torch.float32, device=cfg.device)
+            dynamic_velocity = torch.tensor(
+                target_change[0] / (2 * cfg.dt * cfg.num_substeps),
+                dtype=torch.float32,
+                device=cfg.device,
+            )
+
+            # TODO: Need to update this judgement direction with rotation considered
+            # current_force_judge = torch.tensor(
+            #     [[-1, 0, 0], [1, 0, 0]], dtype=torch.float32, device=cfg.device
+            # )
+
             # print(dynamic_velocity)
             self.simulator.set_mesh_interactive(
                 prev_dynamic_points, current_dynamic_points, dynamic_velocity
