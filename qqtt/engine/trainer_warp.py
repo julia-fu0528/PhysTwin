@@ -1642,7 +1642,7 @@ class InvPhyTrainerWarp:
             ).clone()
             object_pcd = o3d.geometry.PointCloud()
             object_pcd.points = o3d.utility.Vector3dVector(x_vis.cpu().numpy())
-            object_pcd.paint_uniform_color([1, 0, 0])
+            object_pcd.paint_uniform_color([0, 0, 1])
             # object_pcd.paint_uniform_color([1, 1, 1])
             vis.add_geometry(object_pcd)
 

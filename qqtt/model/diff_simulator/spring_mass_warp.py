@@ -348,7 +348,7 @@ def mesh_collision(
         p = wp.mesh_eval_position(mesh, query.face, query.u, query.v)
         delta = next_x - p
         dist = wp.length(delta) * query.sign
-        err = dist
+        err = dist - 0.005
 
         if err < 0.0:
             normal = wp.normalize(delta) * query.sign
@@ -366,26 +366,36 @@ def mesh_collision(
 
             delta_v_normal = v_normal_new - v_normal
 
-            impulse_normal = wp.length(delta_v_normal)
-            impulse_tao = wp.length(v_tao)
-
-            if impulse_tao <= clamp_collide_fric * impulse_normal:
-                v_tao_new = wp.vec3(0.0, 0.0, 0.0)
-            else:
-                a = wp.max(
-                    0.0,
-                    1.0
-                    - clamp_collide_fric
-                    * (1.0 + clamp_collide_elas)
-                    * v_normal_length
-                    / v_tao_length,
-                )
-                v_tao_new = a * v_tao
+            a = wp.max(
+                0.0,
+                1.0
+                - clamp_collide_fric
+                * (1.0 + clamp_collide_elas)
+                * v_normal_length
+                / v_tao_length,
+            )
+            v_tao_new = a * v_tao
 
             next_v = v_normal_new + v_tao_new
             next_v += dynamic_velocity[0]
 
-            next_x = next_x - normal * err
+            if face_map[query.face] == 0 or face_map[query.face] == 1:
+                # Use new speed to judge the new collision position
+                next_x = x0 + next_v * dt
+                query = wp.mesh_query_point_sign_winding_number(
+                    mesh, next_x, max_dist=0.02, accuracy=3.0, threshold=0.6
+                )
+                if query.result:
+                    p = wp.mesh_eval_position(mesh, query.face, query.u, query.v)
+                    delta = next_x - p
+                    dist = wp.length(delta) * query.sign
+                    err = dist - 0.005
+
+                    if err < 0.0:
+                        normal = wp.normalize(delta) * query.sign
+                        next_x = next_x - normal * err
+            else:
+                next_x = next_x - normal * err
 
             # Only calculate the force in the normal direction
             delta_v_normal = v_normal_new - v_normal
