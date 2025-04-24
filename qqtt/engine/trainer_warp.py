@@ -591,7 +591,14 @@ class InvPhyTrainerWarp:
         target_change = np.zeros((self.n_ctrl_parts, 3))
         for key in self.pressed_keys:
             if key in self.key_mappings:
-                if key == "n" or key == "m":
+                if (
+                    key == "n"
+                    or key == "m"
+                    or key == "z"
+                    or key == "x"
+                    or key == "c"
+                    or key == "v"
+                ):
                     pass
                 else:
                     idx, change = self.key_mappings[key]
@@ -604,6 +611,13 @@ class InvPhyTrainerWarp:
                 if key == "n" or key == "m":
                     return self.key_mappings[key]
         return 0.0
+
+    def get_rot_change(self):
+        for key in self.pressed_keys:
+            if key in self.key_mappings:
+                if key == "z" or key == "x" or key == "c" or key == "v":
+                    return np.array(self.key_mappings[key])
+        return np.zeros(3)
 
     def init_control_ui(self):
 
@@ -1553,6 +1567,11 @@ class InvPhyTrainerWarp:
             # Set the finger
             "n": 0.05,
             "m": -0.05,
+            # Set the rotation
+            "z": [0, 0, 2.0 / 180 * np.pi],
+            "x": [0, 0, -2.0 / 180 * np.pi],
+            "c": [2.0 / 180 * np.pi, 0, 0],
+            "v": [-2.0 / 180 * np.pi, 0, 0],
         }
         self.pressed_keys = set()
         self.w2c = w2c
@@ -1663,16 +1682,18 @@ class InvPhyTrainerWarp:
             # cv2.imshow("test", vis_image)
             # cv2.waitKey(0)
 
-        accumulate_change = np.zeros((n_ctrl_parts, 3))
+        accumulate_trans = np.zeros((n_ctrl_parts, 3))
+        accumulate_rot = torch.eye(3, dtype=torch.float32, device=cfg.device)
+
         self.dynamic_vertices = [
-            np.asarray(finger_mesh.vertices) + accumulate_change[0]
-            for finger_mesh in self.dynamic_meshes
+            np.asarray(finger_mesh.vertices) for finger_mesh in self.dynamic_meshes
         ]
 
-        current_force_judge = torch.tensor(
+        origin_force_judge = torch.tensor(
             [[-1, 0, 0], [1, 0, 0]], dtype=torch.float32, device=cfg.device
         )
-        current_dynamic_points = self.dynamic_points
+        current_force_judge = origin_force_judge.clone()
+        current_trans_dynamic_points = self.dynamic_points
         current_finger = 1.0
         close_flag = True
 
@@ -1698,8 +1719,8 @@ class InvPhyTrainerWarp:
                 close_flag = False
             else:
                 close_flag = True
-            
-            print(filter_forces)
+
+            # print(filter_forces)
 
             # Set the intial state for the next step
             self.simulator.set_init_state(
@@ -1849,40 +1870,87 @@ class InvPhyTrainerWarp:
 
             prev_x = x.clone()
 
+            # Update the changes
             target_change = self.get_target_change()
             finger_change = self.get_finger_change()
+            rot_change = self.get_rot_change()
+
+            # Galculate the substep vertices
             if finger_change < 0 and close_flag == False:
                 finger_change = 0
             current_finger += finger_change
             current_finger = max(0.0, min(1.0, current_finger))
 
-            accumulate_change += target_change
+            accumulate_trans += target_change
             finger_meshes = self.robot.get_finger_mesh(current_finger)
-            self.dynamic_vertices = [
-                np.asarray(finger_mesh.vertices) + accumulate_change[0]
-                for finger_mesh in finger_meshes
-            ]
-            new_vertices = np.concatenate(self.dynamic_vertices, axis=0)
-            new_vertices = torch.tensor(
-                new_vertices, dtype=torch.float32, device=cfg.device
+            dynamic_vertices = torch.tensor(
+                [
+                    np.asarray(finger_mesh.vertices) + accumulate_trans[0]
+                    for finger_mesh in finger_meshes
+                ],
+                dtype=torch.float32,
+                device=cfg.device,
             )
-            prev_dynamic_points = current_dynamic_points
-            current_dynamic_points = new_vertices
+            prev_trans_dynamic_points = current_trans_dynamic_points
+            current_trans_dynamic_points = torch.reshape(dynamic_vertices, (-1, 3))
 
+            # Caclulate the interpolated points considering finger and translation
+            ratios = (
+                torch.linspace(
+                    1, cfg.num_substeps, cfg.num_substeps, device=cfg.device
+                ).view(-1, 1, 1)
+                / cfg.num_substeps
+            )
+            interpolated_trans_dynamic_points = (
+                prev_trans_dynamic_points.unsqueeze(0)
+                + (current_trans_dynamic_points - prev_trans_dynamic_points).unsqueeze(
+                    0
+                )
+                * ratios
+            )
+            interpolated_center = torch.mean(interpolated_trans_dynamic_points, dim=1)
+
+            # Do the rotation on the interpolated points
+            new_rot = torch.tensor(rot_change, dtype=torch.float32, device=cfg.device)
+            interpolated_rot_angle =  new_rot.unsqueeze(
+                0
+            ) * ratios.reshape(-1, 1)
+            interpolated_rot_temp = axis_angle_to_matrix(interpolated_rot_angle)
+            interpolated_rot_mat = torch.matmul(accumulate_rot.unsqueeze(0), interpolated_rot_temp)
+            accumulate_rot = interpolated_rot_mat[-1]
+
+            interpolated_dynamic_points = (
+                interpolated_trans_dynamic_points - interpolated_center.unsqueeze(1)
+            ) @ interpolated_rot_mat.permute(0, 2, 1) + interpolated_center.unsqueeze(1)
+            self.dynamic_vertices = (
+                interpolated_dynamic_points[-1]
+                .reshape([-1] + list(self.dynamic_vertices[0].shape))
+                .cpu()
+                .numpy()
+            )
+
+            # Calculate the velocity and omega for calculating relative velocity
             dynamic_velocity = torch.tensor(
                 target_change[0] / (2 * cfg.dt * cfg.num_substeps),
                 dtype=torch.float32,
                 device=cfg.device,
             )
+            dynamic_omega = torch.tensor(
+                rot_change / (2 * cfg.dt * cfg.num_substeps),
+                dtype=torch.float32,
+                device=cfg.device,
+            )
+            # print(dynamic_omega)
 
-            # TODO: Need to update this judgement direction with rotation considered
-            # current_force_judge = torch.tensor(
-            #     [[-1, 0, 0], [1, 0, 0]], dtype=torch.float32, device=cfg.device
-            # )
+            # Update the force judge direction
+            current_force_judge = origin_force_judge.clone() @ interpolated_rot_mat[-1]
 
-            # print(dynamic_velocity)
+            # Update the simulator with the gripper changes
             self.simulator.set_mesh_interactive(
-                prev_dynamic_points, current_dynamic_points, dynamic_velocity
+                interpolated_dynamic_points,
+                interpolated_center,
+                dynamic_velocity,
+                dynamic_omega,
             )
 
             ############### Temporary timer ###############
@@ -2801,3 +2869,43 @@ def calculate_energy(x, spring_Y, springs, rest_lengths, num_object_springs):
 
         total_energy = energy.sum()
         return total_energy
+
+
+# Copy From pytorch3d implementation
+def axis_angle_to_matrix(axis_angle: torch.Tensor) -> torch.Tensor:
+    """
+    Convert rotations given as axis/angle to rotation matrices.
+
+    Args:
+        axis_angle: Rotations given as a vector in axis angle form,
+            as a tensor of shape (..., 3), where the magnitude is
+            the angle turned anticlockwise in radians around the
+            vector's direction.
+        fast: Whether to use the new faster implementation (based on the
+            Rodrigues formula) instead of the original implementation (which
+            first converted to a quaternion and then back to a rotation matrix).
+
+    Returns:
+        Rotation matrices as tensor of shape (..., 3, 3).
+    """
+
+    shape = axis_angle.shape
+    device, dtype = axis_angle.device, axis_angle.dtype
+
+    angles = torch.norm(axis_angle, p=2, dim=-1, keepdim=True).unsqueeze(-1)
+
+    rx, ry, rz = axis_angle[..., 0], axis_angle[..., 1], axis_angle[..., 2]
+    zeros = torch.zeros(shape[:-1], dtype=dtype, device=device)
+    cross_product_matrix = torch.stack(
+        [zeros, -rz, ry, rz, zeros, -rx, -ry, rx, zeros], dim=-1
+    ).view(shape + (3,))
+    cross_product_matrix_sqrd = cross_product_matrix @ cross_product_matrix
+
+    identity = torch.eye(3, dtype=dtype, device=device)
+    angles_sqrd = angles * angles
+    angles_sqrd = torch.where(angles_sqrd == 0, 1, angles_sqrd)
+    return (
+        identity.expand(cross_product_matrix.shape)
+        + torch.sinc(angles / torch.pi) * cross_product_matrix
+        + ((1 - torch.cos(angles)) / angles_sqrd) * cross_product_matrix_sqrd
+    )

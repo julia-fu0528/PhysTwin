@@ -46,25 +46,25 @@ class State:
 @wp.kernel(enable_backward=False)
 def set_mesh_points(
     points: wp.array(dtype=wp.vec3),
-    original_dynamic_points: wp.array(dtype=wp.vec3),
-    target_dynamic_points: wp.array(dtype=wp.vec3),
+    interpolated_points: wp.array2d(dtype=wp.vec3),
     num_dynamic: int,
-    num_substeps: int,
     step: int,
 ):
     tid = wp.tid()
     if tid < num_dynamic:
-        t = float(step + 1) / float(num_substeps)
-        points[tid] = (
-            original_dynamic_points[tid]
-            + (target_dynamic_points[tid] - original_dynamic_points[tid]) * t
-        )
+        points[tid] = interpolated_points[step][tid]
 
 
 @wp.kernel(enable_backward=False)
 def copy_vec3(data: wp.array(dtype=wp.vec3), origin: wp.array(dtype=wp.vec3)):
     tid = wp.tid()
     origin[tid] = data[tid]
+
+
+@wp.kernel(enable_backward=False)
+def copy_2dvec3(data: wp.array2d(dtype=wp.vec3), origin: wp.array2d(dtype=wp.vec3)):
+    i, j = wp.tid()
+    origin[i][j] = data[i][j]
 
 
 @wp.kernel(enable_backward=False)
@@ -328,6 +328,9 @@ def mesh_collision(
     dt: float,
     face_map: wp.array(dtype=int),
     dynamic_velocity: wp.array(dtype=wp.vec3),
+    dynamic_omega: wp.array(dtype=wp.vec3),
+    step: int,
+    interpolated_center: wp.array(dtype=wp.vec3),
     x_new: wp.array(dtype=wp.vec3),
     v_new: wp.array(dtype=wp.vec3),
     collision_forces: wp.array(dtype=wp.vec3),
@@ -345,6 +348,12 @@ def mesh_collision(
     #     mesh, next_x, max_dist=0.01
     # )
     if query.result:
+        # Judge if this is the gripper
+        if face_map[query.face] == 0 or face_map[query.face] == 1:
+            is_gripper = 1
+        else:
+            is_gripper = 0
+
         p = wp.mesh_eval_position(mesh, query.face, query.u, query.v)
         delta = next_x - p
         dist = wp.length(delta) * query.sign
@@ -353,7 +362,11 @@ def mesh_collision(
         if err < 0.0:
             normal = wp.normalize(delta) * query.sign
 
-            v0 = v0 - dynamic_velocity[0]
+            if is_gripper == 1:
+                real_dynamic_velocity = dynamic_velocity[0] + wp.cross(
+                    dynamic_omega[0], (x0 - interpolated_center[step])
+                )
+                v0 = v0 - real_dynamic_velocity
 
             v_normal = wp.dot(v0, normal) * normal
             v_tao = v0 - v_normal
@@ -377,9 +390,10 @@ def mesh_collision(
             v_tao_new = a * v_tao
 
             next_v = v_normal_new + v_tao_new
-            next_v += dynamic_velocity[0]
+            if is_gripper == 1:
+                next_v += real_dynamic_velocity
 
-            if face_map[query.face] == 0 or face_map[query.face] == 1:
+            if is_gripper == 1:
                 # Use new speed to judge the new collision position
                 next_x = x0 + next_v * dt
                 query = wp.mesh_query_point_sign_winding_number(
@@ -919,15 +933,20 @@ class SpringMassSystemWarp:
                 device=self.device,
                 requires_grad=False,
             )
-            self.wp_original_dynamic_points = wp.from_torch(
-                dynamic_points.clone(), dtype=wp.vec3, requires_grad=False
+            self.wp_interpolated_dynamic_points = wp.from_torch(
+                dynamic_points.clone().repeat(self.num_substeps, 1, 1),
+                dtype=wp.vec3,
+                requires_grad=False,
             )
-            self.wp_target_dynamic_points = wp.from_torch(
-                dynamic_points.clone(), dtype=wp.vec3, requires_grad=False
+            self.wp_interpolated_center = wp.from_torch(
+                torch.mean(dynamic_points, dim=0).clone().repeat(self.num_substeps, 1),
+                dtype=wp.vec3,
+                requires_grad=False,
             )
             self.num_dynamic = len(dynamic_points)
 
             self.wp_dynamic_velocity = wp.zeros((1), dtype=wp.vec3, requires_grad=False)
+            self.wp_dynamic_omega = wp.zeros((1), dtype=wp.vec3, requires_grad=False)
 
         # Create the CUDA graph to acclerate
         if cfg.use_graph:
@@ -1088,20 +1107,27 @@ class SpringMassSystemWarp:
         )
 
     def set_mesh_interactive(
-        self, last_dynamic_points, dynamic_points, dynamic_velocity
+        self,
+        interpolated_dynamic_points,
+        interpolated_center,
+        dynamic_velocity,
+        dynamic_omega,
     ):
         # Set the controller points
         wp.launch(
-            copy_vec3,
-            dim=len(dynamic_points),
-            inputs=[last_dynamic_points],
-            outputs=[self.wp_original_dynamic_points],
+            copy_2dvec3,
+            dim=(
+                interpolated_dynamic_points.shape[0],
+                interpolated_dynamic_points.shape[1],
+            ),
+            inputs=[interpolated_dynamic_points],
+            outputs=[self.wp_interpolated_dynamic_points],
         )
         wp.launch(
             copy_vec3,
-            dim=len(dynamic_points),
-            inputs=[dynamic_points],
-            outputs=[self.wp_target_dynamic_points],
+            dim=len(interpolated_center),
+            inputs=[interpolated_center],
+            outputs=[self.wp_interpolated_center],
         )
 
         wp.launch(
@@ -1109,6 +1135,13 @@ class SpringMassSystemWarp:
             dim=1,
             inputs=[dynamic_velocity],
             outputs=[self.wp_dynamic_velocity],
+        )
+
+        wp.launch(
+            copy_vec3,
+            dim=1,
+            inputs=[dynamic_omega],
+            outputs=[self.wp_dynamic_omega],
         )
 
     def update_collision_graph(self):
@@ -1211,10 +1244,8 @@ class SpringMassSystemWarp:
                     dim=len(self.static_mesh_warp.points),
                     inputs=[
                         self.static_mesh_warp.points,
-                        self.wp_original_dynamic_points,
-                        self.wp_target_dynamic_points,
+                        self.wp_interpolated_dynamic_points,
                         self.num_dynamic,
-                        self.num_substeps,
                         i,
                     ],
                 )
@@ -1232,6 +1263,9 @@ class SpringMassSystemWarp:
                         self.dt,
                         self.face_map,
                         self.wp_dynamic_velocity,
+                        self.wp_dynamic_omega,
+                        i,
+                        self.wp_interpolated_center,
                     ],
                     outputs=[
                         self.wp_states[i].wp_x,
