@@ -41,6 +41,7 @@ gaussian_output_video/
 gaussian_output_dynamic
 interactive_my_test.py
 xarm
+temp.sh
 
 
 # Byte-compiled / optimized / DLL files

@@ -10,7 +10,7 @@ output_video_dir="./gaussian_output_video"
 #         "single_push_sloth"
 #         "weird_package")
 
-scenes=("rope_white")
+scenes=("eval_rope_white_hand" "eval_rope_white_without_hand")
 
 exp_name="init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0"
 
