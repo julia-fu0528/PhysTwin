@@ -367,13 +367,16 @@ def mesh_collision(
                     dynamic_omega[0], (x0 - interpolated_center[step])
                 )
                 v0 = v0 - real_dynamic_velocity
+                clamp_collide_elas = 0.0
+                clamp_collide_fric = 2.0
+            else:
+                clamp_collide_elas = wp.clamp(collide_elas[0], low=0.0, high=1.0)
+                clamp_collide_fric = wp.clamp(collide_fric[0], low=0.0, high=2.0)
 
             v_normal = wp.dot(v0, normal) * normal
             v_tao = v0 - v_normal
             v_normal_length = wp.length(v_normal)
             v_tao_length = wp.max(wp.length(v_tao), 1e-6)
-            clamp_collide_elas = wp.clamp(collide_elas[0], low=0.0, high=1.0)
-            clamp_collide_fric = wp.clamp(collide_fric[0], low=0.0, high=2.0)
 
             v_normal_new = -clamp_collide_elas * v_normal
 
