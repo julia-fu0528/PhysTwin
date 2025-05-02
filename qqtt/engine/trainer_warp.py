@@ -122,8 +122,8 @@ class InvPhyTrainerWarp:
             mask=self.init_masks,
         )
 
+        self.static_meshes = static_meshes
         if static_meshes is not None:
-            self.static_meshes = static_meshes
             if robot is not None:
                 # Extract the dynamic meshes from the robot
                 self.robot = robot
@@ -1661,8 +1661,8 @@ class InvPhyTrainerWarp:
             ).clone()
             object_pcd = o3d.geometry.PointCloud()
             object_pcd.points = o3d.utility.Vector3dVector(x_vis.cpu().numpy())
-            object_pcd.paint_uniform_color([0, 0, 1])
-            # object_pcd.paint_uniform_color([1, 1, 1])
+            # object_pcd.paint_uniform_color([0, 0, 1])
+            object_pcd.paint_uniform_color([1, 1, 1])
             vis.add_geometry(object_pcd)
 
             # o3d.visualization.draw_geometries([object_pcd] + self.static_meshes)
