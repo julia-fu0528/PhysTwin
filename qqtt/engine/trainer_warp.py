@@ -1661,8 +1661,8 @@ class InvPhyTrainerWarp:
             ).clone()
             object_pcd = o3d.geometry.PointCloud()
             object_pcd.points = o3d.utility.Vector3dVector(x_vis.cpu().numpy())
-            # object_pcd.paint_uniform_color([0, 0, 1])
-            object_pcd.paint_uniform_color([1, 1, 1])
+            object_pcd.paint_uniform_color([0, 0, 1])
+            # object_pcd.paint_uniform_color([1, 1, 1])
             vis.add_geometry(object_pcd)
 
             # o3d.visualization.draw_geometries([object_pcd] + self.static_meshes)
@@ -1696,6 +1696,7 @@ class InvPhyTrainerWarp:
         current_trans_dynamic_points = self.dynamic_points
         current_finger = 1.0
         close_flag = True
+        is_closing = False
 
         while True:
 
@@ -1876,8 +1877,19 @@ class InvPhyTrainerWarp:
             rot_change = self.get_rot_change()
 
             # Galculate the substep vertices
-            if finger_change < 0 and close_flag == False:
-                finger_change = 0
+            if finger_change > 0:
+                is_closing = False
+            elif finger_change < 0:
+                is_closing = True
+                
+            if is_closing:
+                if close_flag == True:
+                    finger_change = -0.05
+                else:
+                    finger_change = 0.0
+            else:
+                finger_change = 0.05
+
             current_finger += finger_change
             current_finger = max(0.0, min(1.0, current_finger))
 
