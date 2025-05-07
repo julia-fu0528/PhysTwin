@@ -1716,7 +1716,7 @@ class InvPhyTrainerWarp:
             filter_forces = torch.einsum(
                 "ij,ij->i", collision_forces, current_force_judge
             )
-            if torch.all(filter_forces > 1e4):
+            if torch.all(filter_forces > 3e4):
                 close_flag = False
             else:
                 close_flag = True
