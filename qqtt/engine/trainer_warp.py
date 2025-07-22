@@ -1218,7 +1218,8 @@ class InvPhyTrainerWarp:
             # cv2.imshow("test", vis_image)
             # cv2.waitKey(0)
 
-        self.simulator.create_resting_case()
+        if self.simulator.object_collision_flag:
+            self.simulator.create_resting_case()
 
         while True:
 
@@ -1736,7 +1737,8 @@ class InvPhyTrainerWarp:
         close_flag = True
         is_closing = False
 
-        self.simulator.create_resting_case()
+        if self.simulator.object_collision_flag:
+            self.simulator.create_resting_case()
 
         while True:
 
