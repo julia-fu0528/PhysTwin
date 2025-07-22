@@ -1446,7 +1446,7 @@ class InvPhyTrainerWarp:
 
         listener.stop()
 
-    def interactive_robot(self, model_path, gs_path, n_ctrl_parts=1, inv_ctrl=False):
+    def interactive_robot(self, model_path, gs_path, n_ctrl_parts=1, inv_ctrl=False, virtual_key_input=False):
         # Load the model
         logger.info(f"Load model from {model_path}")
         checkpoint = torch.load(model_path, map_location=cfg.device)
@@ -1577,6 +1577,11 @@ class InvPhyTrainerWarp:
         self.w2c = w2c
         self.intrinsic = intrinsic
         self.init_control_ui()
+
+        if virtual_key_input:
+            # Initialize keyboard tracking variables
+            self.virtual_keys = {}     # Dictionary to track virtual keys with timestamps
+            self.virtual_key_duration = 0.03  # Virtual key press duration in seconds
 
         listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
         listener.start()
@@ -1819,7 +1824,33 @@ class InvPhyTrainerWarp:
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
             cv2.imshow("Interactive Playground", frame)
-            cv2.waitKey(1)
+            key = cv2.waitKey(1)
+
+            if virtual_key_input:
+                # Handle virtual keyboard input through OpenCV window
+                if key != -1:
+                    key_char = chr(key & 0xFF).lower()
+                    if key_char in self.key_mappings:
+                        # Store virtual key with timestamp - refresh timestamp if already pressed
+                        self.virtual_keys[key_char] = time.time()
+                        self.pressed_keys.add(key_char)
+                    elif key == 27:  # ESC key to exit
+                        break
+                
+                # Process all keyboard inputs (both physical and virtual)
+                # For virtual keys, check if they're still active based on timestamp
+                current_time = time.time()
+                keys_to_remove = []
+                for k, press_time in self.virtual_keys.items():
+                    if current_time - press_time > self.virtual_key_duration:
+                        keys_to_remove.append(k)
+                
+                # Remove expired virtual keys
+                for k in keys_to_remove:
+                    if k in self.pressed_keys:
+                        self.pressed_keys.discard(k)
+                    if k in self.virtual_keys:
+                        del self.virtual_keys[k]
 
             frame_comp_time = (
                 frame_timer.stop() + frame_setup_time

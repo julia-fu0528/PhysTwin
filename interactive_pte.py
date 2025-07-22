@@ -175,6 +175,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--inv_ctrl", action="store_true", help="invert horizontal control direction"
     )
+    parser.add_argument(
+        "--virtual_key_input", action="store_true", help="use virtual key input"
+    )
     args = parser.parse_args()
 
     base_path = args.base_path
@@ -268,4 +271,5 @@ if __name__ == "__main__":
         gaussians_path,
         args.n_ctrl_parts,
         args.inv_ctrl,
+        virtual_key_input=args.virtual_key_input,
     )
