@@ -1218,6 +1218,8 @@ class InvPhyTrainerWarp:
             # cv2.imshow("test", vis_image)
             # cv2.waitKey(0)
 
+        self.simulator.create_resting_case()
+
         while True:
 
             total_timer.start()
@@ -1733,6 +1735,8 @@ class InvPhyTrainerWarp:
         current_finger = 1.0
         close_flag = True
         is_closing = False
+
+        self.simulator.create_resting_case()
 
         while True:
 

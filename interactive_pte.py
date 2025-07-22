@@ -235,7 +235,7 @@ if __name__ == "__main__":
         new_mesh.transform(static_pose)
         new_mesh.paint_uniform_color([0.929, 0, 1])
         new_mesh.compute_vertex_normals()
-        static_meshes.append(new_mesh)
+        # static_meshes.append(new_mesh)
     # coordinate = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
     # o3d.visualization.draw_geometries(static_meshes + [coordinate])
 

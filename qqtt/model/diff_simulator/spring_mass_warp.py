@@ -251,6 +251,7 @@ def update_potential_collision(
     masks: wp.array(dtype=wp.int32),
     collision_dist: float,
     grid: wp.uint64,
+    resting_collision_pairs: wp.array2d(dtype=wp.bool),
     collision_indices: wp.array2d(dtype=wp.int32),
     collision_number: wp.array(dtype=wp.int32),
 ):
@@ -265,6 +266,8 @@ def update_potential_collision(
     neighbors = wp.hash_grid_query(grid, x1, collision_dist * 5.0)
     for index in neighbors:
         if index != i:
+            if resting_collision_pairs[i][index] == True or resting_collision_pairs[index][i] == True:
+                continue
             x2 = x[index]
             mask2 = masks[index]
 
@@ -315,6 +318,28 @@ def object_collision(
         v_new[tid] = v1 - J_average / m1
     else:
         v_new[tid] = v1
+
+# Calcualte the rest state pairs
+@wp.kernel(enable_backward=False)
+def build_resting_collision_pairs(
+    x: wp.array(dtype=wp.vec3),
+    collision_dist: float,
+    grid: wp.uint64,
+    resting_collision_pairs: wp.array2d(dtype=wp.bool),
+):
+
+    tid = wp.tid()
+
+    # order threads by cell
+    i = wp.hash_grid_point_id(grid, tid)
+
+    x1 = x[i]
+
+    neighbors = wp.hash_grid_query(grid, x1, collision_dist * 2.0)
+    for index in neighbors:
+        if index < i:
+            resting_collision_pairs[i][index] = wp.bool(1)
+            resting_collision_pairs[index][i] = wp.bool(1)
 
 
 # This function is not validated to be differentiable yet
@@ -801,6 +826,12 @@ class SpringMassSystemWarp:
                 (self.wp_init_vertices.shape[0]), dtype=wp.int32, requires_grad=False
             )
 
+            self.resting_collision_pairs = wp.zeros(
+                (self.wp_init_vertices.shape[0], self.wp_init_vertices.shape[0]),
+                dtype=wp.bool,
+                requires_grad=False,
+            )
+
         # Initialize the GT for calculating losses
         self.gt_object_points = gt_object_points
         if cfg.data_type == "real":
@@ -989,6 +1020,20 @@ class SpringMassSystemWarp:
         else:
             self.tape = wp.Tape()
 
+    # Create the rest map for self-collision in frame 0
+    def create_resting_case(self):
+        self.collision_grid.build(self.wp_states[0].wp_x, self.collision_dist * 5.0)
+        wp.launch(
+            build_resting_collision_pairs,
+            dim=self.num_object_points,
+            inputs=[
+                self.wp_states[0].wp_x,
+                self.collision_dist,
+                self.collision_grid.id,
+                ],
+            outputs=[self.resting_collision_pairs],            
+        )   
+
     def set_controller_target(self, frame_idx, pure_inference=False):
         if self.controller_points is not None:
             # Set the controller points
@@ -1159,6 +1204,7 @@ class SpringMassSystemWarp:
                 self.wp_masks,
                 self.collision_dist,
                 self.collision_grid.id,
+                self.resting_collision_pairs,
             ],
             outputs=[self.wp_collision_indices, self.wp_collision_number],
         )
