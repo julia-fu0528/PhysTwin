@@ -1986,7 +1986,7 @@ class InvPhyTrainerWarp:
             # print(dynamic_omega)
 
             # Update the force judge direction
-            current_force_judge = origin_force_judge.clone() @ interpolated_rot_mat[-1]
+            current_force_judge = origin_force_judge.clone() @ interpolated_rot_mat[-1].T
 
             # Update the simulator with the gripper changes
             self.simulator.set_mesh_interactive(
