@@ -26,4 +26,3 @@ collision_dist: 0.02
 collision_learn: true
 chamfer_weight: 1.0
 track_weight: 1.0
-self_collision: true

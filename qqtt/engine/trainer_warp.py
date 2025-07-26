@@ -172,6 +172,12 @@ class InvPhyTrainerWarp:
             self_collision=cfg.self_collision,
         )
 
+        self.simulator.set_init_state(
+                self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
+            )
+        if self.simulator.object_collision_flag:
+            self.simulator.create_resting_case()
+
         if not pure_inference_mode:
             self.optimizer = torch.optim.Adam(
                 [
@@ -188,7 +194,7 @@ class InvPhyTrainerWarp:
             if "debug" not in cfg.run_name:
                 wandb.init(
                     # set the wandb project where this run will be logged
-                    project="phystwin_eval",
+                    project="phystwin_rest_state_collision_all",
                     name=cfg.run_name,
                     config=cfg.to_dict(),
                 )

@@ -359,6 +359,9 @@ class OptimizerCMA:
             self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
         )
 
+        if self.simulator.object_collision_flag:
+            self.simulator.create_resting_case()
+
         if visualize == True:
             vertices = [
                 wp.to_torch(self.simulator.wp_states[0].wp_x, requires_grad=False).cpu()
