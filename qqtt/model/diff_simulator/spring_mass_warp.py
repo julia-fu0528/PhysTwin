@@ -1022,7 +1022,7 @@ class SpringMassSystemWarp:
 
     # Create the rest map for self-collision in frame 0
     def create_resting_case(self):
-        self.collision_grid.build(self.wp_states[0].wp_x, self.collision_dist * 5.0)
+        self.collision_grid.build(self.wp_states[0].wp_x, self.collision_dist * 5)
         wp.launch(
             build_resting_collision_pairs,
             dim=self.num_object_points,

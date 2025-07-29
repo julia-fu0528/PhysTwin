@@ -42,7 +42,8 @@ gaussian_output_dynamic*
 interactive_my_test.py
 xarm/
 temp.sh
-
+results_old/
+results*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
