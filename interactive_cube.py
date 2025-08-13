@@ -171,6 +171,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--inv_ctrl", action="store_true", help="invert horizontal control direction"
     )
+    parser.add_argument(
+        "--virtual_key_input", action="store_true", help="use virtual key input"
+    )
     args = parser.parse_args()
 
     base_path = args.base_path
@@ -193,12 +196,21 @@ if __name__ == "__main__":
     cfg.bg_img_path = args.bg_img_path
 
     # Load the cube mesh and do the downsampling
-    cube_mesh = o3d.io.read_triangle_mesh("cube.stl")
+    # cube_mesh = o3d.io.read_triangle_mesh("cube.stl")
+    # static_pose = np.array(
+    #     [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, -0.025], [0, 0, 0, 1]],
+    #     dtype=np.float32,
+    # )
+    # cube_mesh.transform(static_pose)
+
+    cube_mesh = o3d.io.read_triangle_mesh("T_mesh.stl")
     static_pose = np.array(
-        [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, -0.025], [0, 0, 0, 1]],
+        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, -0.041], [0, 0, 0, 1]],
         dtype=np.float32,
     )
     cube_mesh.transform(static_pose)
+
+    cube_mesh.scale(0.5, center=cube_mesh.get_center())
 
     # cube_mesh.compute_vertex_normals()
     # cube_mesh.paint_uniform_color([1, 1, 1])
@@ -232,4 +244,5 @@ if __name__ == "__main__":
         cube_mesh,
         args.n_ctrl_parts,
         args.inv_ctrl,
+        virtual_key_input=args.virtual_key_input,
     )

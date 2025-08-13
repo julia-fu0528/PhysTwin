@@ -2092,7 +2092,7 @@ class InvPhyTrainerWarp:
 
         listener.stop()
 
-    def interactive_cube(self, cube_mesh, n_ctrl_parts=1, inv_ctrl=False):
+    def interactive_cube(self, cube_mesh, n_ctrl_parts=1, inv_ctrl=False, virtual_key_input=False):
         # Sample the points
         # Convert to trimesh mesh
         trimesh_mesh = trimesh.Trimesh(vertices=cube_mesh.vertices, faces=cube_mesh.triangles)
@@ -2145,6 +2145,9 @@ class InvPhyTrainerWarp:
         ) = self._init_start(
             object_points,
             None,
+            # TODO: can change based on requirement
+            object_radius=0.5,
+            object_max_neighbours=50,
         )
 
         spring_Y = torch.ones(
@@ -2245,6 +2248,11 @@ class InvPhyTrainerWarp:
         self.w2c = w2c
         self.intrinsic = intrinsic
         self.init_control_ui()
+
+        if virtual_key_input:
+            # Initialize keyboard tracking variables
+            self.virtual_keys = {}     # Dictionary to track virtual keys with timestamps
+            self.virtual_key_duration = 0.03  # Virtual key press duration in seconds
 
         listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
         listener.start()
@@ -2458,7 +2466,33 @@ class InvPhyTrainerWarp:
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
             cv2.imshow("Interactive Playground", frame)
-            cv2.waitKey(1)
+            key = cv2.waitKey(1)
+
+            if virtual_key_input:
+                # Handle virtual keyboard input through OpenCV window
+                if key != -1:
+                    key_char = chr(key & 0xFF).lower()
+                    if key_char in self.key_mappings:
+                        # Store virtual key with timestamp - refresh timestamp if already pressed
+                        self.virtual_keys[key_char] = time.time()
+                        self.pressed_keys.add(key_char)
+                    elif key == 27:  # ESC key to exit
+                        break
+                
+                # Process all keyboard inputs (both physical and virtual)
+                # For virtual keys, check if they're still active based on timestamp
+                current_time = time.time()
+                keys_to_remove = []
+                for k, press_time in self.virtual_keys.items():
+                    if current_time - press_time > self.virtual_key_duration:
+                        keys_to_remove.append(k)
+                
+                # Remove expired virtual keys
+                for k in keys_to_remove:
+                    if k in self.pressed_keys:
+                        self.pressed_keys.discard(k)
+                    if k in self.virtual_keys:
+                        del self.virtual_keys[k]
 
             frame_comp_time = (
                 frame_timer.stop() + frame_setup_time
@@ -2552,7 +2586,7 @@ class InvPhyTrainerWarp:
             # print(dynamic_omega)
 
             # Update the force judge direction
-            current_force_judge = origin_force_judge.clone() @ interpolated_rot_mat[-1]
+            current_force_judge = origin_force_judge.clone() @ interpolated_rot_mat[-1].T
 
             # Update the simulator with the gripper changes
             self.simulator.set_mesh_interactive(
