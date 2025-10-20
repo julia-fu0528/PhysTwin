@@ -9,6 +9,7 @@ import torch
 import pickle
 import json
 from argparse import ArgumentParser
+import os
 
 
 def set_all_seeds(seed):
@@ -40,10 +41,10 @@ if __name__ == "__main__":
     train_frame = args.train_frame
     max_iter = args.max_iter
 
-    if "cloth" in case_name or "package" in case_name:
-        cfg.load_from_yaml("configs/cloth.yaml")
-    else:
-        cfg.load_from_yaml("configs/real.yaml")
+    # if "cloth" in case_name or "package" in case_name:
+    cfg.load_from_yaml("configs/cloth.yaml")
+    # else:
+    #     cfg.load_from_yaml("configs/real.yaml")
 
     base_dir = f"experiments_optimization/{case_name}"
 
@@ -57,7 +58,11 @@ if __name__ == "__main__":
         data = json.load(f)
     cfg.intrinsics = np.array(data["intrinsics"])
     cfg.WH = data["WH"]
-    cfg.overlay_path = f"{base_path}/{case_name}/color"
+    # cfg.overlay_path = f"{base_path}/{case_name}/color"
+    cfg.overlay_path = f"{base_path}/{case_name}"
+    cfg.cameras = [subdir for subdir in os.listdir(cfg.overlay_path) if "cam" in subdir]
+    cfg.start_frame = data["start_frame"]
+    cfg.end_frame = data["end_frame"]
 
     logger.set_log_file(path=base_dir, name="optimize_cma_log")
     optimizer = OptimizerCMA(

@@ -1547,7 +1547,7 @@ class InvPhyTrainerWarp:
         fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (width, height))
 
-        frame_path = f"{cfg.overlay_path}/{vis_cam_idx}/0.png"
+        frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_raw/{cfg.start_frame:06d}.png"
         frame = cv2.imread(frame_path)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -1621,7 +1621,7 @@ class InvPhyTrainerWarp:
         # cv2.waitKey(0)
         video_writer.write(frame)
 
-        for i in tqdm(range(1, frame_len)):
+        for i in tqdm(range(cfg.start_frame+1, cfg.end_frame+1)):
             if cfg.data_type == "real":
                 self.simulator.set_controller_target(i, pure_inference=True)
             if self.simulator.object_collision_flag:
@@ -1671,7 +1671,7 @@ class InvPhyTrainerWarp:
 
             prev_x = x.clone()
 
-            frame_path = f"{cfg.overlay_path}/{vis_cam_idx}/{i}.png"
+            frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_raw/{i:06d}.png"
             frame = cv2.imread(frame_path)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -1839,7 +1839,7 @@ class InvPhyTrainerWarp:
         fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (width, height))
 
-        frame_path = f"{cfg.overlay_path}/{vis_cam_idx}/0.png"
+        frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_raw/{cfg.start_frame:06d}.png"
         frame = cv2.imread(frame_path)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -1952,7 +1952,7 @@ class InvPhyTrainerWarp:
         cv2.waitKey(1)
         video_writer.write(frame)
 
-        for i in tqdm(range(1, frame_len)):
+        for i in tqdm(range(cfg.start_frame+1, cfg.end_frame+1)):
             if cfg.data_type == "real":
                 self.simulator.set_controller_target(i, pure_inference=True)
             if self.simulator.object_collision_flag:
@@ -2002,7 +2002,7 @@ class InvPhyTrainerWarp:
 
             prev_x = x.clone()
 
-            frame_path = f"{cfg.overlay_path}/{vis_cam_idx}/{i}.png"
+            frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_raw/{i:06d}.png"
             frame = cv2.imread(frame_path)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 

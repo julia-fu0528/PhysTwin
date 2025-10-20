@@ -6,7 +6,8 @@ import cv2
 from .config import cfg
 import pyrender
 import trimesh
-
+import os
+import sys
 
 def visualize_pc(
     object_points,
@@ -126,6 +127,8 @@ def visualize_pc(
         vis.poll_events()
         vis.update_renderer()
 
+        cameras = [subdir for subdir in os.listdir(cfg.overlay_path) if "cam" in subdir]
+        print(f"cameras: {cameras}")
         # Capture frame and write to video file if save_video is True
         if save_video:
             frame = np.asarray(vis.capture_screen_float_buffer(do_render=True))
@@ -133,7 +136,7 @@ def visualize_pc(
             if cfg.overlay_path is not None:
                 # Get the mask where the pixel is white
                 mask = np.all(frame == [255, 255, 255], axis=-1)
-                image_path = f"{cfg.overlay_path}/{vis_cam_idx}/{i}.png"
+                image_path = f"{cfg.overlay_path}/{cameras[vis_cam_idx]}/undistorted_raw/{cfg.start_frame+i:06d}.png"
                 overlay = cv2.imread(image_path)
                 overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
                 frame[mask] = overlay[mask]
