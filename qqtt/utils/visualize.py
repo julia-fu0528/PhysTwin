@@ -88,6 +88,7 @@ def visualize_pc(
             object_pcd.points = o3d.utility.Vector3dVector(
                 object_points[i, np.where(object_visibilities[i])[0], :]
             )
+            print(f"visibilities:{object_visibilities[i]}")
             object_pcd.colors = o3d.utility.Vector3dVector(
                 object_colors[i, np.where(object_visibilities[i])[0], :]
             )

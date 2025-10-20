@@ -239,7 +239,6 @@ class OptimizerCMA:
             x_init, visualize=True, video_path=f"{cfg.base_dir}/optimizeCMA/init.mp4"
         )
         print(f"after saving optimizeCMA/init.mp4")
-        sys.exit()
         
         std = 1 / 6
         es = cma.CMAEvolutionStrategy(x_init, std, {"bounds": [0.0, 1.0], "seed": 42})
@@ -418,9 +417,14 @@ class OptimizerCMA:
             )
 
         total_loss /= cfg.train_frame - 1
-
+        
         if visualize == True:
             vertices = torch.stack(vertices, dim=0)
+            # DEBUG: Check particle data
+            print(f"Number of particles: {len(vertices[:, : self.num_all_points, :])}")
+            print(f"Particle positions min/max: {vertices[:, : self.num_all_points, :].min()}/{vertices[:, : self.num_all_points, :].max()}")
+            
+            # self.object_colors = np.ones_like(self.object_points) * [1, 0, 0]  # Bright red
             visualize_pc(
                 vertices[:, : self.num_all_points, :],
                 self.object_colors,
@@ -428,6 +432,10 @@ class OptimizerCMA:
                 visualize=False,
                 save_video=True,
                 save_path=video_path,
+                vis_cam_idx=19,
             )
-
+            print(f"Real data shape: {self.dataset.object_points.shape}")
+            print(f"Simulation data shape: {vertices.shape}")
+            print(f"Real data range: {self.dataset.object_points.min()} to {self.dataset.object_points.max()}")
+            print(f"Simulation range: {vertices.min()} to {vertices.max()}")
         return total_loss

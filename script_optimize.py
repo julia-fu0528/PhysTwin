@@ -18,5 +18,5 @@ for i, dir_name in enumerate(dir_names):
     train_frame = split["train"][1]
 
     os.system(
-        f"python optimize_cma.py --base_path {base_path} --case_name {case_name} --train_frame {train_frame}"
+        f"python optimize_cma.py --base_path {base_path} --case_name {case_name} --train_frame {train_frame} --max_iter 2"
     )
