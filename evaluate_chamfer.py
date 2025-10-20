@@ -9,7 +9,7 @@ from pytorch3d.loss import chamfer_distance
 
 prediction_dir = "./experiments"
 base_path = "./data/different_types"
-output_file = "results/final_results.csv"
+output_file = "results/final_results.csv" 
 
 if not os.path.exists("results"):
     os.makedirs("results")
