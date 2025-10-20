@@ -65,7 +65,7 @@ def visualize_pc(
     # The pcs is a 4d pcd numpy array with shape (n_frames, n_points, 3)
     vis = o3d.visualization.Visualizer()
     # vis.create_window(visible=visualize, width=width, height=height)
-    vis.create_window(visible=visualize, width=cfg.WH[0], height=cfg.WH[1])
+    vis.create_window(visible=True, width=cfg.WH[0], height=cfg.WH[1])
 
     if save_video and visualize:
         raise ValueError("Cannot save video and visualize at the same time.")
@@ -138,23 +138,13 @@ def visualize_pc(
             print(f"save_video:{save_video}")
             frame = np.asarray(vis.capture_screen_float_buffer(do_render=True))
             frame = (frame * 255).astype(np.uint8)
-            print(f"cfg.overlay_path:{cfg.overlay_path}")
             if cfg.overlay_path is not None:
                 frame_num = cfg.start_frame + i
-                mask_path = f"{cfg.overlay_path}/{cameras[vis_cam_idx]}/mask.zarr"
-                mask = zarr.open(mask_path, mode="r")
-                mask = mask[frame_num, :, :]
-                print(f"Mask unique values: {np.unique(mask)}")
-                print(f"Mask shape: {mask.shape}")
-                print(f"Non-zero mask pixels: {np.count_nonzero(mask)}")
-                
-                # Get the mask where the pixel is white
-                # mask = np.all(frame == [255, 255, 255], axis=-1)
+                mask = np.all(frame == [255, 255, 255], axis=-1)
                 image_path = f"{cfg.overlay_path}/{cameras[vis_cam_idx]}/undistorted_raw/{frame_num:06d}.png"
                 overlay = cv2.imread(image_path)
                 overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-                frame[~mask] = overlay[~mask]
-                # frame = overlay
+                frame[mask] = overlay[mask]  # Replace background
             # Convert RGB to BGR
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             video_writer.write(frame)

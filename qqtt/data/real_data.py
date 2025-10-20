@@ -96,4 +96,5 @@ class RealData:
                 visualize=False,
                 save_video=True,
                 save_path=f"{self.base_dir}/gt.mp4",
+                vis_cam_idx=2,
             )
