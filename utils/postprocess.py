@@ -7,11 +7,51 @@ import pickle
 import json
 import cv2
 
+from brics_utils import read_params
+
+
+def farthest_point_sampling_with_indices(points, num_samples):
+    """
+    return the indices of the sampled points
+    
+    Args:
+        points: (N, 3) numpy array
+        num_samples: int
+    
+    Returns:
+        indices: (num_samples,) the indices of the sampled points
+    """
+    N = points.shape[0]
+    
+    if num_samples >= N:
+        return np.arange(N)
+    
+    # initialize
+    sampled_indices = np.zeros(num_samples, dtype=np.int32)
+    distances = np.full(N, np.inf)
+    
+    # randomly select the first point
+    current_idx = np.random.randint(0, N)
+    sampled_indices[0] = current_idx
+    
+    # iteratively select the farthest point
+    for i in range(1, num_samples):
+        # update the distances
+        current_point = points[current_idx]
+        dists = np.linalg.norm(points - current_point, axis=1)
+        distances = np.minimum(distances, dists)
+        
+        # select the farthest point
+        current_idx = np.argmax(distances)
+        sampled_indices[i] = current_idx
+    
+    return sampled_indices
+
 control_pcd_dir = "/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/urdf_pcds"
 control_pcd_files = sorted(glob.glob(f"{control_pcd_dir}/*.ply"))
 start_frame = int(control_pcd_files[0].split("/")[-1].split(".")[0])
 # end_frame = int(control_pcd_files[-1].split("/")[-1].split(".")[0])
-end_frame = 150
+end_frame = 200
 num_frames = end_frame - start_frame + 1
 control_pcd_files = control_pcd_files[:num_frames]
 print(f"Control pcd files: {len(control_pcd_files)}")
@@ -26,22 +66,33 @@ print(f"Object pcd files: {len(object_pcd_files)}")
 # print(f"Colors files: {len(colors_files)}")
 assert len(control_pcd_files) == len(object_pcd_files), "Control and object pcd files have different lengths"
 
-# # save split.json
-# split = {
-#     "frame_len": end_frame - start_frame + 1,
-#     "train": [start_frame, int((end_frame - start_frame + 1) * 0.7)],
-#     "test": [int((end_frame - start_frame + 1) * 0.7), end_frame+1]
-# }
-# with open(f"/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/split.json", "w") as f:
-#     json.dump(split, f)
+# save split.json
+split = {
+    "frame_len": end_frame - start_frame + 1,
+    "train": [start_frame, int((end_frame - start_frame + 1) * 0.7)],
+    "test": [int((end_frame - start_frame + 1) * 0.7), end_frame+1]
+}
+with open(f"/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/split.json", "w") as f:
+    json.dump(split, f)
 
-# print(f"Saved split.json to /users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/split.json")
+print(f"Saved split.json to /users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/split.json")
 
 # save metadata.json and calibrate.pkl
 camera_dir = "/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/calibration"
 c2ws = np.load(f"{camera_dir}/extrinsics.npy")
-intrs = np.load(f"{camera_dir}/intrinsics.npy")
-
+# intrs = np.load(f"{camera_dir}/intrinsics.npy")
+optim_path = "/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/optim_params_undistorted.txt"
+optim_params = read_params(optim_path)
+intrs = []
+for i in range(len(optim_params)):
+    K = np.eye(3, dtype=float)
+    K[0, 0] = optim_params[i]["fx"]
+    K[1, 1] = optim_params[i]["fy"]
+    K[0, 2] = optim_params[i]["cx"]
+    K[1, 2] = optim_params[i]["cy"]
+    intrs.append(K)
+intrs = np.array(intrs)
+print(f"intrs: {intrs.shape}")
 img_shape = cv2.imread(os.path.join(colors_dir, cameras[0], "undistorted_raw", "000000.png")).shape
 print(f"img_shape type: {img_shape}")
 
@@ -49,25 +100,44 @@ metadata = {
     "intrinsics": intrs.tolist(),
     "WH": [img_shape[1], img_shape[0]],
     "fps": 30,
-    "frame_num": end_frame - start_frame + 1,
+    "frame_num": num_frames,
     "start_frame": start_frame,
     "end_frame": end_frame,
+    "cameras": cameras,
 }
 
 print(f"start_frame: {start_frame}, end_frame: {end_frame}")
 with open(f"/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/metadata.json", "w") as f:
     json.dump(metadata, f)
 
-# with open(f"/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/calibrate.pkl", "wb") as f:
-#     pickle.dump(c2ws, f)
+with open(f"/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/calibrate.pkl", "wb") as f:
+    pickle.dump(c2ws, f)
 
-# print(f"Saved metadata.json and calibrate.pkl to /users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000")
+print(f"Saved metadata.json and calibrate.pkl to /users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000")
+
+# # fps
+# fps_dir = "/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/fps"
+# num_samples = 4000
+# os.makedirs(fps_dir, exist_ok=True)
+# sampled_indices = None
+# for i, object_file in enumerate(object_pcd_files):
+#     output_path = object_file.replace("pcd", "fps")
+#     object_pcd = o3d.io.read_point_cloud(object_file)
+#     original_points = np.asarray(object_pcd.points)
+#     if i == 0:
+#         sampled_indices = farthest_point_sampling_with_indices(original_points, num_samples)
+#         print(f"Frame {i}: {len(original_points)} -> {len(sampled_indices)} points")
+#     downsampled_pcd = object_pcd.select_by_index(sampled_indices.tolist())
+#     o3d.io.write_point_cloud(output_path, downsampled_pcd)
+#     print(f"Saved downsampled pcd to {output_path}")
 
 # # Create final_data.pkl
 # # Process all frames
 # all_control_points = []
 # all_object_points = []
 # all_object_colors = []
+# sampled_indices = None
+# num_samples = 4000
 
 # for i, (control_file, object_file) in enumerate(zip(control_pcd_files, object_pcd_files)):
 #         print(f"{i}th: control file: {control_file}, object file: {object_file}")
@@ -80,7 +150,12 @@ with open(f"/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_
 #         # Load object points  
 #         object_pcd = o3d.io.read_point_cloud(object_file)
 #         object_points = np.asarray(object_pcd.points)
-#         objects_colors = np.asarray(object_pcd.colors)
+#         if i == 0:
+#             sampled_indices = farthest_point_sampling_with_indices(object_points, num_samples)
+#             print(f"Frame {i}: {len(object_points)} -> {len(sampled_indices)} points")
+#         object_points = object_points[sampled_indices]
+#         objects_colors = np.asarray(object_pcd.colors)[sampled_indices]
+#         assert len(object_points) == len(objects_colors)
 #         all_object_points.append(object_points)
 #         all_object_colors.append(objects_colors)
 

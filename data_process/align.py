@@ -264,9 +264,14 @@ def line_point_distance(p, points):
 
 if __name__ == "__main__":
     existDir(output_dir)
+    
+    # Load the metadata
+    with open(f"{base_path}/{case_name}/metadata.json", "r") as f:
+        data = json.load(f)
 
+    cameras = data["cameras"]
     cam_idx = 0
-    img_path = f"{base_path}/{case_name}/color/{cam_idx}/0.png"
+    img_path = f"{base_path}/{case_name}/{cameras[cam_idx]}/undistorted_raw/000000.png"
     mesh_path = f"{base_path}/{case_name}/shape/object.glb"
     # Get the mask index of the object
     with open(f"{base_path}/{case_name}/mask/mask_info_{cam_idx}.json", "r") as f:
@@ -278,9 +283,7 @@ if __name__ == "__main__":
                 raise ValueError("More than one object detected.")
             obj_idx = int(key)
     mask_img_path = f"{base_path}/{case_name}/mask/{cam_idx}/{obj_idx}/0.png"
-    # Load the metadata
-    with open(f"{base_path}/{case_name}/metadata.json", "r") as f:
-        data = json.load(f)
+    
     intrinsic = np.array(data["intrinsics"])[cam_idx]
 
     # Load the c2w for the camera

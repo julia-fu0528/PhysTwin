@@ -6,8 +6,9 @@ import cv2
 from .config import cfg
 import pyrender
 import trimesh
-import os
+import os   
 import sys
+import zarr
 
 def visualize_pc(
     object_points,
@@ -20,6 +21,7 @@ def visualize_pc(
     save_path=None,
     vis_cam_idx=0,
 ):
+    print(f"calling visualize_pc")
     # Deprecated function, use visualize_pc instead
     FPS = cfg.FPS
     width, height = cfg.WH
@@ -62,14 +64,16 @@ def visualize_pc(
 
     # The pcs is a 4d pcd numpy array with shape (n_frames, n_points, 3)
     vis = o3d.visualization.Visualizer()
-    vis.create_window(visible=visualize, width=width, height=height)
+    # vis.create_window(visible=visualize, width=width, height=height)
+    vis.create_window(visible=visualize, width=cfg.WH[0], height=cfg.WH[1])
 
     if save_video and visualize:
         raise ValueError("Cannot save video and visualize at the same time.")
 
     # Initialize video writer if save_video is True
     if save_video:
-        fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
+        # fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(save_path, fourcc, FPS, (width, height))
 
     if controller_points is not None:
@@ -131,22 +135,37 @@ def visualize_pc(
         print(f"cameras: {cameras}")
         # Capture frame and write to video file if save_video is True
         if save_video:
+            print(f"save_video:{save_video}")
             frame = np.asarray(vis.capture_screen_float_buffer(do_render=True))
             frame = (frame * 255).astype(np.uint8)
+            print(f"cfg.overlay_path:{cfg.overlay_path}")
             if cfg.overlay_path is not None:
+                frame_num = cfg.start_frame + i
+                mask_path = f"{cfg.overlay_path}/{cameras[vis_cam_idx]}/mask.zarr"
+                mask = zarr.open(mask_path, mode="r")
+                mask = mask[frame_num, :, :]
+                print(f"Mask unique values: {np.unique(mask)}")
+                print(f"Mask shape: {mask.shape}")
+                print(f"Non-zero mask pixels: {np.count_nonzero(mask)}")
+                
                 # Get the mask where the pixel is white
-                mask = np.all(frame == [255, 255, 255], axis=-1)
-                image_path = f"{cfg.overlay_path}/{cameras[vis_cam_idx]}/undistorted_raw/{cfg.start_frame+i:06d}.png"
+                # mask = np.all(frame == [255, 255, 255], axis=-1)
+                image_path = f"{cfg.overlay_path}/{cameras[vis_cam_idx]}/undistorted_raw/{frame_num:06d}.png"
                 overlay = cv2.imread(image_path)
                 overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-                frame[mask] = overlay[mask]
+                frame[~mask] = overlay[~mask]
+                # frame = overlay
             # Convert RGB to BGR
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             video_writer.write(frame)
+            print(f"frame saved for frame {frame_num}")
 
         if visualize:
             time.sleep(1 / FPS)
 
     vis.destroy_window()
+    print(f"save_video:{save_video}")
     if save_video:
+        print(f"before releasing")
         video_writer.release()
+        print(f"after releasing")

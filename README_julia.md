@@ -1,1 +1,1 @@
-uv pip install plyfile einops
+uv pip install plyfile einops zarr

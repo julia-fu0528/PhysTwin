@@ -9,6 +9,7 @@ import warp as wp
 import cma
 import pickle
 import os
+import sys
 
 
 class OptimizerCMA:
@@ -233,11 +234,13 @@ class OptimizerCMA:
             init_drag_damping,
             init_dashpot_damping,
         ]
-
+        print(f"before saving optimizeCMA/init.mp4")
         self.error_func(
             x_init, visualize=True, video_path=f"{cfg.base_dir}/optimizeCMA/init.mp4"
         )
-
+        print(f"after saving optimizeCMA/init.mp4")
+        sys.exit()
+        
         std = 1 / 6
         es = cma.CMAEvolutionStrategy(x_init, std, {"bounds": [0.0, 1.0], "seed": 42})
         es.optimize(self.error_func, iterations=max_iter)
@@ -263,12 +266,14 @@ class OptimizerCMA:
         final_drag_damping = self.denormalize(optimal_x[10], 0, 20)
         final_dashpot_damping = self.denormalize(optimal_x[11], 0, 200)
 
+        print(f"before saving optimizeCMA/optimal.mp4")
         self.error_func(
             optimal_x,
             visualize=True,
             video_path=f"{cfg.base_dir}/optimizeCMA/optimal.mp4",
         )
-
+        print(f"after saving optimizeCMA/optimal.mp4")
+        
         optimal_results = {}
         optimal_results["global_spring_Y"] = final_global_spring_Y
         optimal_results["object_radius"] = final_object_radius
