@@ -3,6 +3,7 @@ import torch
 import pickle
 from qqtt.utils import logger, visualize_pc, cfg
 import matplotlib.pyplot as plt
+import sys
 
 
 class RealData:
@@ -30,6 +31,9 @@ class RealData:
         self.num_surface_points = (
             self.num_original_points + other_surface_points.shape[0]
         )
+        print(f"other_surface_points.shape: {other_surface_points.shape}")
+        print(f"interior_points.shape: {interior_points.shape}")
+        print(f"object_points.shape: {object_points.shape}")
         self.num_all_points = self.num_surface_points + interior_points.shape[0]
 
         # Concatenate the surface points and interior points
@@ -39,7 +43,7 @@ class RealData:
         self.structure_points = torch.tensor(
             self.structure_points, dtype=torch.float32, device=cfg.device
         )
-
+        print(f"Do structure_points match object_points[0]? {np.allclose(self.structure_points.cpu().numpy(), object_points[0])}")
         self.object_points = torch.tensor(
             object_points, dtype=torch.float32, device=cfg.device
         )
@@ -85,6 +89,7 @@ class RealData:
                 self.object_visibilities,
                 self.object_motions_valid,
                 visualize=True,
+                vis_cam_idx=19,
             )
         if save_gt:
             visualize_pc(

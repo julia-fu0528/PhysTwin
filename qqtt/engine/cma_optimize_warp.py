@@ -242,7 +242,30 @@ class OptimizerCMA:
         
         std = 1 / 6
         es = cma.CMAEvolutionStrategy(x_init, std, {"bounds": [0.0, 1.0], "seed": 42})
-        es.optimize(self.error_func, iterations=max_iter)
+        
+        # Custom optimization loop to save videos after each iteration
+        for iteration in range(max_iter):
+            logger.info(f"Starting iteration {iteration + 1}/{max_iter}")
+            
+            # Run one iteration of CMA-ES
+            es.optimize(self.error_func, iterations=1)
+            
+            # Get current best solution and save video
+            current_best = es.result[0]
+            current_error = es.result[1]
+            
+            logger.info(f"Iteration {iteration + 1}: Best error = {current_error}")
+            
+            # Save video for this iteration
+            video_path = f"{cfg.base_dir}/optimizeCMA/iter_{iteration + 1:03d}.mp4"
+            print(f"before saving {video_path}")
+            self.error_func(
+                current_best, visualize=True, video_path=video_path
+            )
+            print(f"after saving {video_path}")
+            
+            # Log progress
+            logger.info(f"Saved video: {video_path}")
 
         # Get the results
         res = es.result

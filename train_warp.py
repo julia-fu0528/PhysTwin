@@ -34,10 +34,10 @@ if __name__ == "__main__":
     case_name = args.case_name
     train_frame = args.train_frame
 
-    if "cloth" in case_name or "package" in case_name:
-        cfg.load_from_yaml("configs/cloth.yaml")
-    else:
-        cfg.load_from_yaml("configs/real.yaml")
+    # if "cloth" in case_name or "package" in case_name:
+    cfg.load_from_yaml("configs/cloth.yaml")
+    # else:
+    # cfg.load_from_yaml("configs/real.yaml")
 
     print(f"[DATA TYPE]: {cfg.data_type}")
 
@@ -62,7 +62,10 @@ if __name__ == "__main__":
         data = json.load(f)
     cfg.intrinsics = np.array(data["intrinsics"])
     cfg.WH = data["WH"]
-    cfg.overlay_path = f"{base_path}/{case_name}/color"
+    # cfg.overlay_path = f"{base_path}/{case_name}/color"
+    cfg.overlay_path = f"{base_path}/{case_name}"
+    cfg.start_frame = data["start_frame"]
+    cfg.end_frame = data["end_frame"]
 
     logger.set_log_file(path=base_dir, name="inv_phy_log")
     trainer = InvPhyTrainerWarp(

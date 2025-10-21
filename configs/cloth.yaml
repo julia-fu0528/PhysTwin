@@ -18,7 +18,7 @@ controller_radius: 0.04
 controller_max_neighbours: 50
 spring_Y_min: 0
 spring_Y_max: 1e5
-reverse_z: true
+reverse_z: false
 vp_front: [1, 0, -2]
 vp_up: [0, 0, -1]
 vp_zoom: 1

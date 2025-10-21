@@ -65,7 +65,7 @@ def visualize_pc(
     # The pcs is a 4d pcd numpy array with shape (n_frames, n_points, 3)
     vis = o3d.visualization.Visualizer()
     # vis.create_window(visible=visualize, width=width, height=height)
-    vis.create_window(visible=True, width=cfg.WH[0], height=cfg.WH[1])
+    vis.create_window(visible=True, width=width, height=height)
 
     if save_video and visualize:
         raise ValueError("Cannot save video and visualize at the same time.")
@@ -75,6 +75,7 @@ def visualize_pc(
         # fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(save_path, fourcc, FPS, (width, height))
+        # video_writer = cv2.VideoWriter(save_path, fourcc, FPS, (width, height))
 
     if controller_points is not None:
         controller_meshes = []
@@ -136,7 +137,6 @@ def visualize_pc(
         print(f"cameras: {cameras}")
         # Capture frame and write to video file if save_video is True
         if save_video:
-            print(f"save_video:{save_video}")
             frame = np.asarray(vis.capture_screen_float_buffer(do_render=True))
             frame = (frame * 255).astype(np.uint8)
             if cfg.overlay_path is not None:
@@ -149,14 +149,10 @@ def visualize_pc(
             # Convert RGB to BGR
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             video_writer.write(frame)
-            print(f"frame saved for frame {frame_num}")
 
         if visualize:
             time.sleep(1 / FPS)
 
     vis.destroy_window()
-    print(f"save_video:{save_video}")
     if save_video:
-        print(f"before releasing")
         video_writer.release()
-        print(f"after releasing")

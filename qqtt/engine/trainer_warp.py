@@ -525,6 +525,18 @@ class InvPhyTrainerWarp:
                 )
 
         vertices = torch.stack(vertices, dim=0)
+        
+        # DEBUG: Check particle data
+        print(f"Number of particles: {len(vertices[:, : self.num_all_points, :])}")
+        print(f"Particle positions min/max: {vertices[:, : self.num_all_points, :].min()}/{vertices[:, : self.num_all_points, :].max()}")
+        print(f"Real data shape: {self.dataset.object_points.shape}")
+        print(f"Simulation data shape: {vertices.shape}")
+        print(f"Real data range: {self.dataset.object_points.min()} to {self.dataset.object_points.max()}")
+        print(f"Simulation range: {vertices.min()} to {vertices.max()}")
+        
+        # DEBUG: Check coordinate system
+        print(f"reverse_z: {cfg.reverse_z}")
+        print(f"Camera WH: {cfg.WH}")
 
         if save_trajectory:
             logger.info(f"Save the trajectory to {save_path}")
@@ -538,6 +550,7 @@ class InvPhyTrainerWarp:
                 self.object_colors,
                 self.controller_points,
                 visualize=True,
+                vis_cam_idx=19,
             )
         else:
             assert video_path is not None, "Please provide the video path to save"
@@ -548,6 +561,7 @@ class InvPhyTrainerWarp:
                 visualize=False,
                 save_video=True,
                 save_path=video_path,
+                vis_cam_idx=19,
             )
 
     def on_press(self, key):
@@ -1543,9 +1557,9 @@ class InvPhyTrainerWarp:
         ).clone()
 
         vis = o3d.visualization.Visualizer()
-        vis.create_window(visible=False, width=width, height=height)
-        fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
-        video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (width, height))
+        vis.create_window(visible=False, width=cfg.WH[0], height=cfg.WH[1])
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
+        video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (cfg.WH[0], cfg.WH[1]))
 
         frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_raw/{cfg.start_frame:06d}.png"
         frame = cv2.imread(frame_path)
@@ -1835,9 +1849,9 @@ class InvPhyTrainerWarp:
         ).clone()
 
         vis = o3d.visualization.Visualizer()
-        vis.create_window(visible=False, width=width, height=height)
-        fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
-        video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (width, height))
+        vis.create_window(visible=False, width=cfg.WH[0], height=cfg.WH[1])
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
+        video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (cfg.WH[0], cfg.WH[1]))
 
         frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_raw/{cfg.start_frame:06d}.png"
         frame = cv2.imread(frame_path)
