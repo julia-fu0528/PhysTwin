@@ -16,7 +16,7 @@ for i, dir_name in enumerate(dir_names):
         split = json.load(f)
 
     train_frame = split["train"][1]
-
+    print(f"Train frame: {train_frame}")
     os.system(
         f"python optimize_cma.py --base_path {base_path} --case_name {case_name} --train_frame {train_frame} --max_iter 10"
     )

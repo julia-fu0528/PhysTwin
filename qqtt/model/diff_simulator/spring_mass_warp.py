@@ -744,25 +744,28 @@ class SpringMassSystemWarp:
             * torch.ones(self.n_springs, dtype=torch.float32, device=self.device),
             requires_grad=True,
         )
+        # Ensure collision_learn is a boolean
+        collision_learn_bool = bool(cfg.collision_learn)
+        
         self.wp_collide_elas = wp.from_torch(
             torch.tensor([collide_elas], dtype=torch.float32, device=self.device),
-            requires_grad=cfg.collision_learn,
+            requires_grad=collision_learn_bool,
         )
         self.wp_collide_fric = wp.from_torch(
             torch.tensor([collide_fric], dtype=torch.float32, device=self.device),
-            requires_grad=cfg.collision_learn,
+            requires_grad=collision_learn_bool,
         )
         self.wp_collide_object_elas = wp.from_torch(
             torch.tensor(
                 [collide_object_elas], dtype=torch.float32, device=self.device
             ),
-            requires_grad=cfg.collision_learn,
+            requires_grad=collision_learn_bool,
         )
         self.wp_collide_object_fric = wp.from_torch(
             torch.tensor(
                 [collide_object_fric], dtype=torch.float32, device=self.device
             ),
-            requires_grad=cfg.collision_learn,
+            requires_grad=collision_learn_bool,
         )
 
         # Create the CUDA graph to acclerate

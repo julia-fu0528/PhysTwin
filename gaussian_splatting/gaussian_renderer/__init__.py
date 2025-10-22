@@ -58,7 +58,10 @@ def render_gsplat(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.T
 
     means3D = pc.get_xyz
     opacity = pc.get_opacity
+    print(f"pc.get_scaling shape: {pc.get_scaling.shape}")
+    print(f"scaling_modifier: {scaling_modifier}")
     scales = pc.get_scaling * scaling_modifier
+    print(f"scales shape: {scales.shape}")
     rotations = pc.get_rotation
 
     if override_color is not None:
@@ -72,6 +75,7 @@ def render_gsplat(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.T
 
     rasterize_mode = 'classic' if not antialiased else 'antialiased'
 
+    print("scales shape: ", scales.shape)
     render_colors, render_alphas, info = rasterization(
         means=means3D,    # [N, 3]
         quats=rotations,  # [N, 4]

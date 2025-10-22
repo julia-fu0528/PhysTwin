@@ -17,6 +17,8 @@ from pynput import keyboard
 import pyrender
 import trimesh
 import matplotlib.pyplot as plt
+import torch.nn.functional as F
+from torchvision.transforms import Resize
 
 from gaussian_splatting.scene.gaussian_model import GaussianModel
 from gaussian_splatting.scene.cameras import Camera
@@ -57,7 +59,7 @@ class InvPhyTrainerWarp:
         cfg.base_dir = base_dir
         cfg.device = device
         cfg.run_name = base_dir.split("/")[-1]
-        cfg.train_frame = train_frame
+        cfg.train_frame = train_frame - cfg.start_frame if train_frame is not None else None
 
         self.init_masks = None
         self.init_velocities = None
@@ -305,7 +307,7 @@ class InvPhyTrainerWarp:
     def train(self, start_epoch=-1):
         # Render the initial visualization
         video_path = f"{cfg.base_dir}/train/init.mp4"
-        self.visualize_sim(save_only=True, video_path=video_path)
+        self.visualize_sim(save_only=True, video_path=video_path, use_all_frames=False)
 
         best_loss = None
         best_epoch = None
@@ -366,10 +368,10 @@ class InvPhyTrainerWarp:
                         self.simulator.wp_states[-1].wp_v,
                     )
 
-            total_loss /= cfg.train_frame - 1
+            total_loss /= cfg.train_frame
             if cfg.data_type == "real":
-                total_chamfer_loss /= cfg.train_frame - 1
-                total_track_loss /= cfg.train_frame - 1
+                total_chamfer_loss /= cfg.train_frame
+                total_track_loss /= cfg.train_frame
             wandb.log(
                 {
                     "loss": total_loss,
@@ -397,7 +399,7 @@ class InvPhyTrainerWarp:
 
             if i % cfg.vis_interval == 0 or i == cfg.iterations - 1:
                 video_path = f"{cfg.base_dir}/train/sim_iter{i}.mp4"
-                self.visualize_sim(save_only=True, video_path=video_path)
+                self.visualize_sim(save_only=True, video_path=video_path, use_all_frames=False)
                 wandb.log(
                     {
                         "video": wandb.Video(
@@ -490,14 +492,18 @@ class InvPhyTrainerWarp:
             video_path=video_path,
             save_trajectory=True,
             save_path=save_path,
+            use_all_frames=True,  # Use all frames for testing/inference
         )
 
     def visualize_sim(
-        self, save_only=True, video_path=None, save_trajectory=False, save_path=None
+        self, save_only=True, video_path=None, save_trajectory=False, save_path=None, use_all_frames=False
     ):
         logger.info("Visualizing the simulation")
-        # Visualize the whole simulation using current set of parameters in the physical simulator
-        frame_len = self.dataset.frame_len
+        # Visualize the simulation using current set of parameters in the physical simulator
+        if use_all_frames:
+            frame_len = self.dataset.frame_len  # Use all frames for testing/inference
+        else:
+            frame_len = cfg.train_frame  # Use only training frames for training visualization
         self.simulator.set_init_state(
             self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
         )
@@ -1216,6 +1222,19 @@ class InvPhyTrainerWarp:
 
             alpha = image[..., 3:4]
             rgb = image[..., :3] * 255
+            print(f"rgb shape: {rgb.shape}")
+            # downsample the frame to the same shape as rgb
+            # frame = cv2.resize(frame, (rgb.shape[1], rgb.shape[0]))
+            print(f"type frame: {type(frame)}")
+            
+            frame = F.interpolate(
+                frame.permute(2, 0, 1).unsqueeze(0),  # (1080,1920,3) → (1,3,1080,1920)
+                size=(720, 1280),                       # Target (height, width)
+                mode='bilinear',
+                align_corners=False
+            ).squeeze(0).permute(1, 2, 0)     
+            print(f"frame shape: {frame.shape}")
+            print(f"alpha shape: {alpha.shape}")
             frame = alpha * rgb + (1 - alpha) * frame
             frame = frame.cpu().numpy()
             image_mask = image_mask.cpu().numpy()

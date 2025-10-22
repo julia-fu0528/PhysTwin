@@ -7,7 +7,7 @@ import pickle
 import json
 import cv2
 
-from brics_utils import read_params
+from brics_utils import read_params, vis_extr, get_extr
 
 
 def farthest_point_sampling_with_indices(points, num_samples):
@@ -68,9 +68,9 @@ assert len(control_pcd_files) == len(object_pcd_files), "Control and object pcd 
 
 # save split.json
 split = {
-    "frame_len": end_frame - start_frame + 1,
-    "train": [start_frame, int((end_frame - start_frame + 1) * 0.7)],
-    "test": [int((end_frame - start_frame + 1) * 0.7), end_frame+1]
+    "frame_len": num_frames,
+    "train": [start_frame, start_frame + int(num_frames * 0.7)],
+    "test": [int(num_frames * 0.7), end_frame+1]
 }
 with open(f"/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/split.json", "w") as f:
     json.dump(split, f)
@@ -80,10 +80,21 @@ print(f"Saved split.json to /users/wfu16/data/users/wfu16/datasets/2025-10-14_ju
 # save metadata.json and calibrate.pkl
 camera_dir = "/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/calibration"
 c2ws = np.load(f"{camera_dir}/extrinsics.npy")
-# intrs = np.load(f"{camera_dir}/intrinsics.npy")
+# vis_extr(c2ws)
 optim_path = "/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/optim_params_undistorted.txt"
 optim_params = read_params(optim_path)
+extr_params = read_params("/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/optim_params_undistorted.txt")
+
+# c2ws = []
+# for extr_param in extr_params:
+#     if extr_param["cam_name"] not in cameras:
+#         continue
+#     c2w = get_extr(extr_param)
+#     c2ws.append(c2w)
+# c2ws = np.array(c2ws)
+# print(f"c2ws: {c2ws.shape}")
 intrs = []
+# c2ws = []
 for i in range(len(optim_params)):
     K = np.eye(3, dtype=float)
     K[0, 0] = optim_params[i]["fx"]
@@ -91,7 +102,11 @@ for i in range(len(optim_params)):
     K[0, 2] = optim_params[i]["cx"]
     K[1, 2] = optim_params[i]["cy"]
     intrs.append(K)
+    extr = get_extr(optim_params[i])
+    # c2ws.append(extr)
 intrs = np.array(intrs)
+# c2ws = np.array(c2ws)
+# intrs = np.load(f"{camera_dir}/intrinsics.npy")
 print(f"intrs: {intrs.shape}")
 img_shape = cv2.imread(os.path.join(colors_dir, cameras[0], "undistorted_raw", "000000.png")).shape
 print(f"img_shape type: {img_shape}")
@@ -131,61 +146,61 @@ print(f"Saved metadata.json and calibrate.pkl to /users/wfu16/data/users/wfu16/d
 #     o3d.io.write_point_cloud(output_path, downsampled_pcd)
 #     print(f"Saved downsampled pcd to {output_path}")
 
-# # Create final_data.pkl
-# # Process all frames
-# all_control_points = []
-# all_object_points = []
-# all_object_colors = []
-# sampled_indices = None
-# num_samples = 4000
+# Create final_data.pkl
+# Process all frames
+all_control_points = []
+all_object_points = []
+all_object_colors = []
+sampled_indices = None
+num_samples = 4000
 
-# for i, (control_file, object_file) in enumerate(zip(control_pcd_files, object_pcd_files)):
-#         print(f"{i}th: control file: {control_file}, object file: {object_file}")
+for i, (control_file, object_file) in enumerate(zip(control_pcd_files, object_pcd_files)):
+        print(f"{i}th: control file: {control_file}, object file: {object_file}")
         
-#         # Load control points
-#         control_pcd = o3d.io.read_point_cloud(control_file)
-#         control_points = np.asarray(control_pcd.points)
-#         all_control_points.append(control_points)
+        # Load control points
+        control_pcd = o3d.io.read_point_cloud(control_file)
+        control_points = np.asarray(control_pcd.points)
+        all_control_points.append(control_points)
         
-#         # Load object points  
-#         object_pcd = o3d.io.read_point_cloud(object_file)
-#         object_points = np.asarray(object_pcd.points)
-#         if i == 0:
-#             sampled_indices = farthest_point_sampling_with_indices(object_points, num_samples)
-#             print(f"Frame {i}: {len(object_points)} -> {len(sampled_indices)} points")
-#         object_points = object_points[sampled_indices]
-#         objects_colors = np.asarray(object_pcd.colors)[sampled_indices]
-#         assert len(object_points) == len(objects_colors)
-#         all_object_points.append(object_points)
-#         all_object_colors.append(objects_colors)
+        # Load object points  
+        object_pcd = o3d.io.read_point_cloud(object_file)
+        object_points = np.asarray(object_pcd.points)
+        if i == 0:
+            sampled_indices = farthest_point_sampling_with_indices(object_points, num_samples)
+            print(f"Frame {i}: {len(object_points)} -> {len(sampled_indices)} points")
+        object_points = object_points[sampled_indices]
+        objects_colors = np.asarray(object_pcd.colors)[sampled_indices]
+        assert len(object_points) == len(objects_colors)
+        all_object_points.append(object_points)
+        all_object_colors.append(objects_colors)
 
-# # Convert to numpy arrays
-# control_points_array = np.array(all_control_points)
-# object_points_array = np.array(all_object_points)
-# object_colors_array = np.array(all_object_colors)
+# Convert to numpy arrays
+control_points_array = np.array(all_control_points)
+object_points_array = np.array(all_object_points)
+object_colors_array = np.array(all_object_colors)
 
-# print(f"Control points array shape: {control_points_array.shape}")
-# print(f"Object points array shape: {object_points_array.shape}")
-# print(f"Object colors array shape: {object_colors_array.shape}")
+print(f"Control points array shape: {control_points_array.shape}")
+print(f"Object points array shape: {object_points_array.shape}")
+print(f"Object colors array shape: {object_colors_array.shape}")
 
-# object_visibilities = np.ones((object_points_array.shape[0], object_points_array.shape[1]), dtype=bool)
-# object_motions_valid = np.ones((object_points_array.shape[0], object_points_array.shape[1]), dtype=bool)
+object_visibilities = np.ones((object_points_array.shape[0], object_points_array.shape[1]), dtype=bool)
+object_motions_valid = np.ones((object_points_array.shape[0], object_points_array.shape[1]), dtype=bool)
 
-# # Create final_data structure
-# final_data = {
-#     "object_points": object_points_array,
-#     "object_colors": object_colors_array,
-#     "object_visibilities": object_visibilities,
-#     "object_motions_valid": object_motions_valid,
-#     "controller_points": control_points_array,
-#     "surface_points": np.zeros((0, 3)),
-#     "interior_points": np.zeros((0, 3)),
-# }
+# Create final_data structure
+final_data = {
+    "object_points": object_points_array,
+    "object_colors": object_colors_array,
+    "object_visibilities": object_visibilities,
+    "object_motions_valid": object_motions_valid,
+    "controller_points": control_points_array,
+    "surface_points": np.zeros((0, 3)),
+    "interior_points": np.zeros((0, 3)),
+}
 
-# # Save final_data.pkl
-# output_path = "/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/final_data.pkl"
+# Save final_data.pkl
+output_path = "/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/final_data.pkl"
 
-# with open(output_path, "wb") as f:
-#     pickle.dump(final_data, f)
+with open(output_path, "wb") as f:
+    pickle.dump(final_data, f)
     
-#     print(f"Saved final_data.pkl to {output_path}")
+    print(f"Saved final_data.pkl to {output_path}")

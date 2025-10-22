@@ -8,7 +8,6 @@ import pyrender
 import trimesh
 import os   
 import sys
-import zarr
 
 def visualize_pc(
     object_points,

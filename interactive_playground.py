@@ -29,7 +29,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--base_path",
         type=str,
-        default="./data/different_types",
+        # default="./data/different_types",
+        default="/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi",
     )
     parser.add_argument(
         "--gaussian_path",
@@ -39,10 +40,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--bg_img_path",
         type=str,
-        default="./data/bg.png",
+        default="./data/bg.jpg",
     )
-    parser.add_argument("--case_name", type=str, default="double_lift_cloth_3")
-    parser.add_argument("--n_ctrl_parts", type=int, default=2)
+    parser.add_argument("--case_name", type=str, default="episode_0000")
+    parser.add_argument("--n_ctrl_parts", type=int, default=1)
     parser.add_argument(
         "--inv_ctrl", action="store_true", help="invert horizontal control direction"
     )
@@ -54,10 +55,10 @@ if __name__ == "__main__":
     base_path = args.base_path
     case_name = args.case_name
 
-    if "cloth" in case_name or "package" in case_name:
-        cfg.load_from_yaml("configs/cloth.yaml")
-    else:
-        cfg.load_from_yaml("configs/real.yaml")
+    # if "cloth" in case_name or "package" in case_name:
+    cfg.load_from_yaml("configs/cloth.yaml")
+    # else:
+        # cfg.load_from_yaml("configs/real.yaml")
 
     base_dir = f"./temp_experiments/{case_name}"
 
@@ -82,9 +83,13 @@ if __name__ == "__main__":
     cfg.intrinsics = np.array(data["intrinsics"])
     cfg.WH = data["WH"]
     cfg.bg_img_path = args.bg_img_path
+    cfg.cameras = [subdir for subdir in os.listdir(cfg.overlay_path) if "cam" in subdir]
+    cfg.start_frame = data["start_frame"]
+    cfg.end_frame = data["end_frame"]
 
     exp_name = "init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0"
-    gaussians_path = f"{args.gaussian_path}/{case_name}/{exp_name}/point_cloud/iteration_10000/point_cloud.ply"
+    # gaussians_path = f"{args.gaussian_path}/{case_name}/{exp_name}/point_cloud/iteration_10000/point_cloud.ply"
+    gaussians_path = sorted(glob.glob(f"{base_path}/{case_name}/pcd/frame_020000_time_*.ply"))[cfg.start_frame]
 
     logger.set_log_file(path=base_dir, name="inference_log")
     trainer = InvPhyTrainerWarp(

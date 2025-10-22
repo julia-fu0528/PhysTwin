@@ -13,6 +13,17 @@ import open3d as o3d
 # Camera calibration utils
 #########################################
 
+
+def vis_extr(extrs):
+    cam_frames = []
+    for extr in extrs:
+        cam_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+        cam_frame.transform(extr)
+        cam_frames.append(cam_frame)
+    coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.3, origin=[0, 0, 0])
+    cam_frames.append(coordinate_frame)
+    o3d.visualization.draw_geometries(cam_frames)
+    
 def qvec2rotmat(qvec):
     return np.array(
         [

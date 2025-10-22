@@ -26,7 +26,7 @@ class OptimizerCMA:
         cfg.base_dir = base_dir
         cfg.device = device
         cfg.run_name = base_dir.split("/")[-1]
-        cfg.train_frame = train_frame
+        cfg.train_frame = train_frame - cfg.start_frame
 
         if not os.path.exists(f"{cfg.base_dir}/optimizeCMA"):
             # Create directory if it doesn't exist
@@ -395,12 +395,14 @@ class OptimizerCMA:
             self.simulator.set_acc_count(False)
 
         total_loss = 0.0
-        if not visualize:
+        # if not visualize:
             # Only optimize on the train frames
-            max_frame = cfg.train_frame
-        else:
-            max_frame = self.dataset.frame_len
+        max_frame = cfg.train_frame
+        # else:
+            # max_frame = self.dataset.frame_len
 
+        # for j in range(1, max_frame):
+        print(f"max_frame: {max_frame}, cfg.start_frame: {cfg.start_frame}, end_frame: {cfg.end_frame}")
         for j in range(1, max_frame):
             self.simulator.set_controller_target(j)
             if self.simulator.object_collision_flag:
@@ -439,7 +441,7 @@ class OptimizerCMA:
                 self.simulator.wp_states[-1].wp_v,
             )
 
-        total_loss /= cfg.train_frame - 1
+        total_loss /= cfg.train_frame
         
         if visualize == True:
             vertices = torch.stack(vertices, dim=0)
