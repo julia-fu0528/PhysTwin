@@ -320,7 +320,8 @@ def integrate_ground_collision(
     v_z = v0[2]
     next_x_z = (x_z + v_z * dt) * reverse_factor
 
-    if next_x_z < 0.0 and v_z * reverse_factor < -1e-4:
+    # if next_x_z < 0.0 and v_z * reverse_factor < -1e-4:
+    if next_x_z < 0.19 and v_z * reverse_factor < -1e-4:
         # Ground Collision
         v_normal = wp.dot(v0, normal) * normal
         v_tao = v0 - v_normal

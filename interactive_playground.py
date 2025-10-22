@@ -89,8 +89,9 @@ if __name__ == "__main__":
 
     exp_name = "init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0"
     # gaussians_path = f"{args.gaussian_path}/{case_name}/{exp_name}/point_cloud/iteration_10000/point_cloud.ply"
-    gaussians_path = sorted(glob.glob(f"{base_path}/{case_name}/pcd/frame_020000_time_*.ply"))[cfg.start_frame]
+    # gaussians_path = sorted(glob.glob(f"{base_path}/{case_name}/pcd/frame_020000_time_*.ply"))[cfg.start_frame]
 
+    gaussians_path = f"{base_path}/{case_name}/start_obj_pcd.ply"
     logger.set_log_file(path=base_dir, name="inference_log")
     trainer = InvPhyTrainerWarp(
         data_path=f"{base_path}/{case_name}/final_data.pkl",
