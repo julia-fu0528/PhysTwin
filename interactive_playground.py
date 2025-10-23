@@ -90,21 +90,13 @@ if __name__ == "__main__":
     exp_name = "init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0"
     # gaussians_path = f"{args.gaussian_path}/{case_name}/{exp_name}/point_cloud/iteration_10000/point_cloud.ply"
     gaussians_path = sorted(glob.glob(f"{base_path}/{case_name}/pcd/frame_020000_time_*.ply"))[cfg.start_frame]
-
-    
-    
-    R_world_avg = np.array([
-        [-9.92562955e-01, -1.21731464e-01, 4.81e-01],
-        [ 1.96876498e-03, -1.20983548e-02, 9.99924874e-01],
-        [-1.21716494e-01, 9.92489335e-01, 1.22480394e-02]
-    ])
-
-    t_world_avg = np.array([0.38417431, 0.18427508, 0.37144267])
-    ground_transform = np.eye(4)
-    ground_transform[:3, :3] = R_world_avg  # Rotation matrix
-    ground_transform[:3, 3] = t_world_avg   
+    T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.44515172e-01],
+                              [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  5.80970610e-01],
+                              [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  4.01065390e-01],
+                              [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
     # invert the ground transform
-    ground_transform = np.linalg.inv(ground_transform)
+    T_world2marker = np.linalg.inv(T_marker2world)
+    cfg.T_world2marker = T_world2marker
     # gaussians_path = f"{base_path}/{case_name}/start_obj_pcd.ply"
     logger.set_log_file(path=base_dir, name="inference_log")
     trainer = InvPhyTrainerWarp(
@@ -112,8 +104,8 @@ if __name__ == "__main__":
         base_dir=base_dir,
         pure_inference_mode=True,
     )
-    print(f"ground transform: {ground_transform}")
-    trainer.set_ground_transform(ground_transform)
+    # print(f"ground transform: {ground_transform}")
+    # trainer.set_ground_transform(ground_transform)
 
     best_model_path = glob.glob(f"experiments/{case_name}/train/best_*.pth")[0]
     trainer.interactive_playground(

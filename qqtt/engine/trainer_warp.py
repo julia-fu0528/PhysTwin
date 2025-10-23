@@ -572,11 +572,7 @@ class InvPhyTrainerWarp:
 
     def on_press(self, key):
         try:
-            if key.char == 'g':  # Toggle coordinate planes visualization
-                self.show_ground_plane = not self.show_ground_plane
-                print(f"Coordinate planes visualization: {'ON' if self.show_ground_plane else 'OFF'}")
-            else:
-                self.pressed_keys.add(key.char)
+            self.pressed_keys.add(key.char)
         except AttributeError:
             pass
 
@@ -950,6 +946,39 @@ class InvPhyTrainerWarp:
 
         return result
 
+    def _add_3d_particle(self, frame, intrinsic, w2c, width, height, particle_3d_pos=None):
+        """Add a 3D particle that gets projected to 2D screen coordinates"""
+        if particle_3d_pos is None:
+            # Use stored position if available, otherwise use default
+            if hasattr(self, 'particle_3d_pos'):
+                particle_3d_pos = self.particle_3d_pos
+            else:
+                particle_3d_pos = np.array([0.0, 0.0, 0.5])  # 0.5m above origin
+        
+        # Convert 3D position to homogeneous coordinates
+        particle_homogeneous = np.concatenate([particle_3d_pos, [1]])
+        
+        # Project to 2D screen coordinates
+        proj_mat = intrinsic @ w2c[:3, :]
+        particle_2d = proj_mat @ particle_homogeneous
+        particle_2d = particle_2d / particle_2d[-1]  # Normalize by depth
+        
+        # Check if particle is visible (in front of camera and within screen bounds)
+        if (particle_2d[2] > 0 and  # In front of camera
+            0 <= particle_2d[0] < width and  # Within screen width
+            0 <= particle_2d[1] < height):   # Within screen height
+            
+            # Draw the projected particle as a red circle
+            center = (int(particle_2d[0]), int(particle_2d[1]))
+            cv2.circle(frame, center, 8, (0, 0, 255), -1)  # Red filled circle
+            
+            # Add a label showing the 3D position
+            label = f"3D: ({particle_3d_pos[0]:.2f}, {particle_3d_pos[1]:.2f}, {particle_3d_pos[2]:.2f})"
+            cv2.putText(frame, label, (center[0] + 10, center[1] - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+        
+        return frame
+
     def _add_coordinate_planes_visualization(self, frame, intrinsic, w2c, width, height):
         """Add X=0, Y=0, Z=0 plane visualizations to the frame"""
         # Ground plane parameters (from spring_mass_warp.py)
@@ -970,7 +999,11 @@ class InvPhyTrainerWarp:
             ground_position = np.array([0, ground_y, 0])  # Ground at Y=0.18
         
         # Define the three coordinate planes
-        planes = {}
+        planes = {
+            "X=0": {'value': 0.0, 'color': (0, 0, 255), 'label': 'X=0 (YZ plane)'},  # Red
+            "Y=0": {'value': 0.0, 'color': (0, 255, 0), 'label': 'Y=0 (XZ plane)'},  # Green  
+            "Z=0": {'value': 0.0, 'color': (255, 0, 0), 'label': 'Z=0 (XY plane)'}   # Blue
+        }
         
         # Add custom ground plane if available
         if hasattr(self, 'ground_transform') and self.ground_transform is not None:
@@ -986,7 +1019,7 @@ class InvPhyTrainerWarp:
         else:
             planes['Y=ground'] = {'value': ground_y, 'color': (0, 200, 0), 'label': f'Y={ground_y:.2f} (Ground)'}
         
-        grid_size = 15
+        grid_size = 20
         range_size = 1
         
         for plane_name, plane_info in planes.items():
@@ -1019,29 +1052,6 @@ class InvPhyTrainerWarp:
                 for x in x_range:
                     for y in y_range:
                         plane_points.append([x, y, plane_value])
-                        
-            elif plane_name == 'Ground':  # Custom ground plane
-                normal = plane_info['normal']
-                position = plane_info['position']
-                print(f"normal: {normal}")                
-                print(f"position: {position}")
-                # Create two orthogonal vectors in the plane
-                # Find two vectors perpendicular to the normal
-                if abs(normal[0]) < 0.9:
-                    u = np.cross(normal, [1, 0, 0])
-                else:
-                    u = np.cross(normal, [0, 1, 0])
-                u = u / np.linalg.norm(u)
-                v = np.cross(normal, u)
-                v = v / np.linalg.norm(v)
-                
-                # Generate grid points in the plane
-                u_range = np.linspace(-range_size, range_size, grid_size)
-                v_range = np.linspace(-range_size, range_size, grid_size)
-                for u_val in u_range:
-                    for v_val in v_range:
-                        point = position + u_val * u + v_val * v
-                        plane_points.append(point)
             
             plane_points = np.array(plane_points)
             
@@ -1094,37 +1104,10 @@ class InvPhyTrainerWarp:
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         cv2.putText(frame, "Red=X=0, Green=Y=0, Blue=Z=0", (10, 55), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.putText(frame, f"Dark Green=Ground (Y={ground_y:.2f})", (10, 75), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         return frame
 
-    def set_ground_transform(self, transform_matrix):
-        """Set the ground plane transformation matrix
-        
-        Args:
-            transform_matrix: 4x4 transformation matrix defining the ground plane
-                             - Z-axis of rotation matrix is the ground normal (up direction)
-                             - Translation component is the ground position
-        """
-        self.ground_transform = transform_matrix
-        print(f"Ground transform set: {transform_matrix}")
-        
-        # Extract gravity direction (opposite of ground normal)
-        ground_normal = transform_matrix[:3, 2]  # Z-axis is up direction
-        gravity_direction = -ground_normal  # Gravity points opposite to up
-        print(f"Ground normal (up): {ground_normal}")
-        print(f"Gravity direction: {gravity_direction}")
-        
-        # Update simulator with new gravity direction
-        if hasattr(self, 'simulator'):
-            self._update_gravity_direction(gravity_direction)
-
-    def _update_gravity_direction(self, gravity_direction):
-        """Update the physics simulator with new gravity direction"""
-        # Store gravity direction for use in physics simulation
-        self.gravity_direction = gravity_direction
-        print(f"Gravity direction updated: {gravity_direction}")
+    
 
     def _find_closest_point(self, target_points):
         """Find the closest structure point to any of the target points."""
@@ -1441,6 +1424,11 @@ class InvPhyTrainerWarp:
             if self.show_ground_plane:
                 frame = self._add_coordinate_planes_visualization(frame, intrinsic, w2c, width, height)
             
+            # Add 3D particle visualization
+            particle_pos = getattr(self, 'particle_3d_pos', None)
+            # particle_pos = 
+            frame = self._add_3d_particle(frame, intrinsic, w2c, width, height, particle_pos)
+            
             # Debug: Print coordinate system info
             if frame_count % 30 == 0:  # Print every 30 frames
                 if hasattr(self, 'ground_transform') and self.ground_transform is not None:
@@ -1456,6 +1444,9 @@ class InvPhyTrainerWarp:
                 print(f"reverse_z setting: {cfg.reverse_z}")
             
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+            # # Add a red dot to the frame
+            # cv2.circle(frame, (width//2, height//2), 10, (0, 0, 255), -1)  # Red dot at center
 
             cv2.imshow("Interactive Playground", frame)
             key = cv2.waitKey(1)

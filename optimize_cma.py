@@ -47,11 +47,19 @@ if __name__ == "__main__":
     #     cfg.load_from_yaml("configs/real.yaml")
 
     base_dir = f"experiments_optimization/{case_name}"
-
+    T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.44515172e-01],
+                              [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  5.80970610e-01],
+                              [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  4.01065390e-01],
+                              [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+    # invert the ground transform
+    T_world2marker = np.linalg.inv(T_marker2world)
     # Set the intrinsic and extrinsic parameters for visualization
     with open(f"{base_path}/{case_name}/calibrate.pkl", "rb") as f:
         c2ws = pickle.load(f)
+        print(f"c2ws shape: {c2ws.shape}")
+    c2ws = [T_world2marker @ c2w for c2w in c2ws]
     w2cs = [np.linalg.inv(c2w) for c2w in c2ws]
+    cfg.T_world2marker = T_world2marker
     cfg.c2ws = np.array(c2ws)
     cfg.w2cs = np.array(w2cs)
     with open(f"{base_path}/{case_name}/metadata.json", "r") as f:
@@ -63,6 +71,8 @@ if __name__ == "__main__":
     cfg.cameras = [subdir for subdir in os.listdir(cfg.overlay_path) if "cam" in subdir]
     cfg.start_frame = data["start_frame"]
     cfg.end_frame = data["end_frame"]
+    
+    
 
     logger.set_log_file(path=base_dir, name="optimize_cma_log")
     optimizer = OptimizerCMA(

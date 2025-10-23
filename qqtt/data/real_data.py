@@ -15,14 +15,31 @@ class RealData:
             data = pickle.load(f)
 
         object_points = data["object_points"]
+        original_shape = object_points.shape
+        points_flat = object_points.reshape(-1, 3)
+        points_homogeneous = np.hstack((points_flat, np.ones((points_flat.shape[0], 1))))
+        object_points = (cfg.T_world2marker @ points_homogeneous.T).T[:, :3].reshape(original_shape)
+        
         # print range of y values in object_points
         print(f"y range: {object_points[:, :, 1].min():.3f} to {object_points[:, :, 1].max():.3f}")
         object_colors = data["object_colors"]
         object_visibilities = data["object_visibilities"]
         object_motions_valid = data["object_motions_valid"]
+        
         controller_points = data["controller_points"]
+        points_flat = controller_points.reshape(-1, 3)
+        points_homogeneous = np.hstack((points_flat, np.ones((points_flat.shape[0], 1))))
+        controller_points = (cfg.T_world2marker @ points_homogeneous.T).T[:, :3].reshape(controller_points.shape)
+        
         other_surface_points = data["surface_points"]
+        points_flat = other_surface_points.reshape(-1, 3)
+        points_homogeneous = np.hstack((points_flat, np.ones((points_flat.shape[0], 1))))
+        other_surface_points = (cfg.T_world2marker @ points_homogeneous.T).T[:, :3].reshape(other_surface_points.shape)
+        
         interior_points = data["interior_points"]
+        points_flat = interior_points.reshape(-1, 3)
+        points_homogeneous = np.hstack((points_flat, np.ones((points_flat.shape[0], 1))))
+        interior_points = (cfg.T_world2marker @ points_homogeneous.T).T[:, :3].reshape(interior_points.shape)
 
         # Get the rainbow color for the object_colors
         y_min, y_max = np.min(object_points[0, :, 1]), np.max(object_points[0, :, 1])

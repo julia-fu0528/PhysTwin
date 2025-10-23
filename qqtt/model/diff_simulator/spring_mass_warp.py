@@ -704,7 +704,7 @@ class SpringMassSystemWarp:
             self.acc_count = wp.zeros(1, dtype=wp.int32, requires_grad=False)
 
         self.wp_current_object_points = wp.from_torch(
-            self.gt_object_points[1].clone(), dtype=wp.vec3, requires_grad=False
+            self.gt_object_points[1].clone().contiguous(), dtype=wp.vec3, requires_grad=False
         )
         if cfg.data_type == "real":
             self.wp_current_object_visibilities = wp.from_torch(
@@ -721,10 +721,10 @@ class SpringMassSystemWarp:
             self.num_valid_motions = int(self.gt_object_motions_valid[0].sum())
 
             self.wp_original_control_point = wp.from_torch(
-                self.controller_points[0].clone(), dtype=wp.vec3, requires_grad=False
+                self.controller_points[0].clone().contiguous(), dtype=wp.vec3, requires_grad=False
             )
             self.wp_target_control_point = wp.from_torch(
-                self.controller_points[1].clone(), dtype=wp.vec3, requires_grad=False
+                self.controller_points[1].clone().contiguous(), dtype=wp.vec3, requires_grad=False
             )
 
             self.chamfer_loss = wp.zeros(1, dtype=wp.float32, requires_grad=True)
@@ -866,14 +866,14 @@ class SpringMassSystemWarp:
         wp.launch(
             copy_vec3,
             dim=self.num_control_points,
-            inputs=[last_controller_interactive],
-            outputs=[self.wp_original_control_point],
+            inputs=[last_controller_interactive.contiguous()],
+            outputs=[self.wp_original_control_point.contiguous()],
         )
         wp.launch(
             copy_vec3,
             dim=self.num_control_points,
-            inputs=[controller_interactive],
-            outputs=[self.wp_target_control_point],
+            inputs=[controller_interactive.contiguous()],
+            outputs=[self.wp_target_control_point.contiguous()],
         )
 
     def set_init_state(self, wp_x, wp_v, pure_inference=False):
