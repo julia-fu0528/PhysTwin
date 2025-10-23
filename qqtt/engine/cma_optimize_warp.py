@@ -425,8 +425,15 @@ class OptimizerCMA:
                 vertices.append(x.cpu())
 
             if cfg.data_type == "real":
-                if wp.to_torch(self.simulator.acc_count, requires_grad=False)[0] == 0:
-                    self.simulator.set_acc_count(True)
+                # if wp.to_torch(self.simulator.acc_count, requires_grad=False)[0] == 0:
+                acc_tensor = wp.to_torch(self.simulator.acc_count, requires_grad=False)
+                # print(f"acc_tensor shape: {acc_tensor.shape}")
+                # print(f"acc_tensor device: {acc_tensor.device}")
+                # print(f"acc_tensor dtype: {acc_tensor.dtype}")
+                if acc_tensor.numel() > 0:
+                    value = acc_tensor[0].item()  # Use .item() for scalar
+                    if value == 0:
+                        self.simulator.set_acc_count(True)
 
                 # Update the prev_acc used to calculate the acceleration loss
                 self.simulator.update_acc()

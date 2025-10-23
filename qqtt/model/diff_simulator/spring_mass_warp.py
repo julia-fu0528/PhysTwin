@@ -155,6 +155,7 @@ def update_vel_from_force(
 
     drag_damping_factor = wp.exp(-dt * drag_damping)
     all_force = f0 + m0 * wp.vec3(0.0, 0.0, -9.8) * reverse_factor
+    # all_force = f0 + m0 * wp.vec3(0.0, -9.8, 0.0) * reverse_factor
     a = all_force / m0
     v1 = v0 + a * dt
     v2 = v1 * drag_damping_factor
@@ -315,13 +316,17 @@ def integrate_ground_collision(
     v0 = v[tid]
 
     normal = wp.vec3(0.0, 0.0, 1.0) * reverse_factor
+    # normal = wp.vec3(0.0, 1.0, 0.0) * reverse_factor
 
     x_z = x0[2]
     v_z = v0[2]
+    # x_y = x0[1]
+    # v_y = v0[1]
     next_x_z = (x_z + v_z * dt) * reverse_factor
+    # next_x_y = (x_y + v_y * dt) * reverse_factor
 
-    # if next_x_z < 0.0 and v_z * reverse_factor < -1e-4:
-    if next_x_z < 0.19 and v_z * reverse_factor < -1e-4:
+    if next_x_z < 0.185 and v_z * reverse_factor < -1e-4:
+    # if next_x_y < 0.17 and v_y * reverse_factor < -1e-4:
         # Ground Collision
         v_normal = wp.dot(v0, normal) * normal
         v_tao = v0 - v_normal
@@ -343,6 +348,7 @@ def integrate_ground_collision(
 
         v1 = v_normal_new + v_tao_new
         toi = -x_z / v_z
+        # toi = -x_y / v_y
     else:
         v1 = v0
         toi = 0.0

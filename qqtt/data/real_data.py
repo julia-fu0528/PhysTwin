@@ -15,6 +15,8 @@ class RealData:
             data = pickle.load(f)
 
         object_points = data["object_points"]
+        # print range of y values in object_points
+        print(f"y range: {object_points[:, :, 1].min():.3f} to {object_points[:, :, 1].max():.3f}")
         object_colors = data["object_colors"]
         object_visibilities = data["object_visibilities"]
         object_motions_valid = data["object_motions_valid"]

@@ -3,7 +3,8 @@ import numpy as np
 import glob
 # Load your observation.ply or point cloud data
 root_dir = "/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/episode_0000/pcd_clean"
-points = np.load(sorted(glob.glob(f"{root_dir}/*.npz"))[600])["pts"]
+points = [np.load(f)["pts"] for f in sorted(glob.glob(f"{root_dir}/*.npz"))]
+points = np.concatenate(points)
 print(f"x range: {points[:, 0].min():.3f} to {points[:, 0].max():.3f} meters")
 print(f"y range: {points[:, 1].min():.3f} to {points[:, 1].max():.3f} meters")
 print(f"z range: {points[:, 2].min():.3f} to {points[:, 2].max():.3f} meters")

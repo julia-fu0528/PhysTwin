@@ -970,6 +970,11 @@ class InvPhyTrainerWarp:
             ground_position = np.array([0, ground_y, 0])  # Ground at Y=0.18
         
         # Define the three coordinate planes
+        # planes = {
+        #     'X=0': {'value': 0.0, 'color': (0, 0, 255), 'label': 'X=0 (YZ plane)'},  # Red
+        #     'Y=0': {'value': 0.0, 'color': (0, 255, 0), 'label': 'Y=0 (XZ plane)'},  # Green  
+        #     'Z=0': {'value': 0.0, 'color': (255, 0, 0), 'label': 'Z=0 (XY plane)'}   # Blue
+        # }
         planes = {}
         
         # Add custom ground plane if available
@@ -986,7 +991,7 @@ class InvPhyTrainerWarp:
         else:
             planes['Y=ground'] = {'value': ground_y, 'color': (0, 200, 0), 'label': f'Y={ground_y:.2f} (Ground)'}
         
-        grid_size = 15
+        grid_size = 20
         range_size = 1
         
         for plane_name, plane_info in planes.items():
@@ -1025,6 +1030,7 @@ class InvPhyTrainerWarp:
                 position = plane_info['position']
                 print(f"normal: {normal}")                
                 print(f"position: {position}")
+                # sys.exit()
                 # Create two orthogonal vectors in the plane
                 # Find two vectors perpendicular to the normal
                 if abs(normal[0]) < 0.9:
@@ -1096,7 +1102,6 @@ class InvPhyTrainerWarp:
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         cv2.putText(frame, f"Dark Green=Ground (Y={ground_y:.2f})", (10, 75), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
         return frame
 
     def set_ground_transform(self, transform_matrix):

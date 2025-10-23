@@ -21,6 +21,8 @@ spring_Y_max: 1e5
 reverse_z: false
 vp_front: [1, 0, -2]
 vp_up: [0, 0, -1]
+# vp_up: [0, -1, 0]
+# vp_up: [0, 1, 0]
 vp_zoom: 1
 collision_dist: 0.02
 collision_learn: false
