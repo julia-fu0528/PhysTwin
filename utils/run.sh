@@ -31,7 +31,7 @@ python utils/aruco_multiview.py \
     -s 0.005 \
     --image-dir /users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco \
     --cameras ${CAMERAS_BRICS} \
-    --camera-matrices /users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/calibration/intrinsics.npy \
-    --dist-coeffs /users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/calibration/dist.npy \
+    --camera-matrices /oscar/data/gdk/hli230/projects/vitac-particle/2025-11-17/calibration_optim/intrinsics.npy \
+    --dist-coeffs /oscar/data/gdk/hli230/projects/vitac-particle/2025-11-17/calibration_optim/dist.npy \
     --output-dir /users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco/aruco_results \
     -rs -r

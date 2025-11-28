@@ -2,7 +2,7 @@ import glob
 import os
 import json
 
-base_path = "/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi"
+base_path = "/oscar/data/gdk/hli230/projects/vitac-particle/008-pink-cloth"
 dir_names = glob.glob(f"{base_path}/episode_*") 
 for i, dir_name in enumerate(dir_names):
     if i != 0:

@@ -19,6 +19,7 @@ import trimesh
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from torchvision.transforms import Resize
+from scipy.spatial.transform import Rotation as R
 import sys
 from gaussian_splatting.scene.gaussian_model import GaussianModel
 from gaussian_splatting.scene.cameras import Camera
@@ -65,7 +66,7 @@ class InvPhyTrainerWarp:
         self.init_velocities = None
         # Load the data
         if cfg.data_type == "real":
-            self.dataset = RealData(visualize=False, save_gt=False)
+            self.dataset = RealData(visualize=False, save_gt=False, use_grid=False, vis_cam_indices=cfg.vis_cam_indices)
             # Get the object points and controller points
             self.object_points = self.dataset.object_points
             self.object_colors = self.dataset.object_colors
@@ -531,6 +532,18 @@ class InvPhyTrainerWarp:
                 )
 
         vertices = torch.stack(vertices, dim=0)
+        # Add ground plane
+        # ground_plane_pts = self.create_ground_plane(
+        #     x_range=(-0.7, 0.7),
+        #     y_range=(-0.7, 0.7),
+        #     step=0.03,
+        #     z=0.0,
+        # )
+        # logger.info(f"Ground plane points: {ground_plane_pts.shape}")
+        # logger.info(f"Ground plane points: {ground_plane_pts}")
+        # Repeat for each frame
+        # ground_all_frames = ground_plane_pts.unsqueeze(0).repeat(vertices.shape[0], 1, 1)
+        # vertices = torch.cat([vertices[:, :self.num_all_points, :], ground_all_frames], dim=1)
         
         # DEBUG: Check particle data
         print(f"Number of particles: {len(vertices[:, : self.num_all_points, :])}")
@@ -556,7 +569,7 @@ class InvPhyTrainerWarp:
                 self.object_colors,
                 self.controller_points,
                 visualize=True,
-                vis_cam_idx=19,
+                vis_cam_idx=23,
             )
         else:
             assert video_path is not None, "Please provide the video path to save"
@@ -567,7 +580,7 @@ class InvPhyTrainerWarp:
                 visualize=False,
                 save_video=True,
                 save_path=video_path,
-                vis_cam_idx=19,
+                vis_cam_idx=23,
             )
 
     def on_press(self, key):
@@ -856,8 +869,21 @@ class InvPhyTrainerWarp:
 
         if self.n_ctrl_parts == 1:
             current_target = self.hand_left_pos.unsqueeze(0)
+            # current_target = self.hand_left_pos.reshape(-1, 3)
+            # T_m2w = np.linalg.inv(cfg.T_world2marker)
+            # self.projection = self.intrinsic @ (self.w2c @ T_m2w)[:3, :]
+            # T_m2w = torch.as_tensor(T_m2w,
+            #             dtype=current_target.dtype,
+            #             device=current_target.device)
+            # T_w2m = torch.as_tensor(cfg.T_world2marker,
+            #             dtype=current_target.dtype,
+            #             device=current_target.device)
+            # cur_h = F.pad(current_target, (0, 1), value=1.0)
+            # cur_m_h = T_w2m @ cur_h.T
+            # current_target = cur_m_h.T[:, :3]
             # align = 'top-right'
             align = "center"
+            
             result = self._overlay_hand_at_position(
                 result, current_target, x_axis, hand_size, self.hand_left, align
             )
@@ -946,167 +972,6 @@ class InvPhyTrainerWarp:
 
         return result
 
-    def _add_3d_particle(self, frame, intrinsic, w2c, width, height, particle_3d_pos=None):
-        """Add a 3D particle that gets projected to 2D screen coordinates"""
-        if particle_3d_pos is None:
-            # Use stored position if available, otherwise use default
-            if hasattr(self, 'particle_3d_pos'):
-                particle_3d_pos = self.particle_3d_pos
-            else:
-                particle_3d_pos = np.array([0.0, 0.0, 0.5])  # 0.5m above origin
-        
-        # Convert 3D position to homogeneous coordinates
-        particle_homogeneous = np.concatenate([particle_3d_pos, [1]])
-        
-        # Project to 2D screen coordinates
-        proj_mat = intrinsic @ w2c[:3, :]
-        particle_2d = proj_mat @ particle_homogeneous
-        particle_2d = particle_2d / particle_2d[-1]  # Normalize by depth
-        
-        # Check if particle is visible (in front of camera and within screen bounds)
-        if (particle_2d[2] > 0 and  # In front of camera
-            0 <= particle_2d[0] < width and  # Within screen width
-            0 <= particle_2d[1] < height):   # Within screen height
-            
-            # Draw the projected particle as a red circle
-            center = (int(particle_2d[0]), int(particle_2d[1]))
-            cv2.circle(frame, center, 8, (0, 0, 255), -1)  # Red filled circle
-            
-            # Add a label showing the 3D position
-            label = f"3D: ({particle_3d_pos[0]:.2f}, {particle_3d_pos[1]:.2f}, {particle_3d_pos[2]:.2f})"
-            cv2.putText(frame, label, (center[0] + 10, center[1] - 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
-        
-        return frame
-
-    def _add_coordinate_planes_visualization(self, frame, intrinsic, w2c, width, height):
-        """Add X=0, Y=0, Z=0 plane visualizations to the frame"""
-        # Ground plane parameters (from spring_mass_warp.py)
-        print(f"adding coordinate plane visualization")
-        ground_y = 0.18  # Ground level
-        ground_normal = None
-        ground_position = None
-        # Use custom ground plane transformation if available
-        if hasattr(self, 'ground_transform') and self.ground_transform is not None:
-            print(f"using custom ground transform")
-            # Extract ground plane normal and position from transformation matrix
-            ground_normal = self.ground_transform[:3, 2]  # Z-axis of transformation (up direction)
-            ground_position = self.ground_transform[:3, 3]  # Translation component
-            print(f"Custom ground plane - Normal: {ground_normal}, Position: {ground_position}")
-        else:
-            # Default ground plane (Y=0.18)
-            ground_normal = np.array([0, 1, 0])  # Y-axis up
-            ground_position = np.array([0, ground_y, 0])  # Ground at Y=0.18
-        
-        # Define the three coordinate planes
-        planes = {
-            "X=0": {'value': 0.0, 'color': (0, 0, 255), 'label': 'X=0 (YZ plane)'},  # Red
-            "Y=0": {'value': 0.0, 'color': (0, 255, 0), 'label': 'Y=0 (XZ plane)'},  # Green  
-            "Z=0": {'value': 0.0, 'color': (255, 0, 0), 'label': 'Z=0 (XY plane)'}   # Blue
-        }
-        
-        # Add custom ground plane if available
-        if hasattr(self, 'ground_transform') and self.ground_transform is not None:
-            print(f"adding custom ground plane")
-            print(f"ground normal: {ground_normal}")
-            print(f"ground position: {ground_position}")
-            planes['Ground'] = {
-                'normal': ground_normal, 
-                'position': ground_position, 
-                'color': (0, 200, 0), 
-                'label': f'Ground Plane'
-            }
-        else:
-            planes['Y=ground'] = {'value': ground_y, 'color': (0, 200, 0), 'label': f'Y={ground_y:.2f} (Ground)'}
-        
-        grid_size = 20
-        range_size = 1
-        
-        for plane_name, plane_info in planes.items():
-            color = plane_info['color']
-            label = plane_info['label']
-            
-            # Create grid points for this plane
-            plane_points = []
-            
-            if plane_name == 'X=0':  # YZ plane
-                plane_value = plane_info['value']
-                y_range = np.linspace(-range_size, range_size, grid_size)
-                z_range = np.linspace(-range_size, range_size, grid_size)
-                for y in y_range:
-                    for z in z_range:
-                        plane_points.append([plane_value, y, z])
-                        
-            elif plane_name == 'Y=0' or plane_name == 'Y=ground':  # XZ plane
-                plane_value = plane_info['value']
-                x_range = np.linspace(-range_size, range_size, grid_size)
-                z_range = np.linspace(-range_size, range_size, grid_size)
-                for x in x_range:
-                    for z in z_range:
-                        plane_points.append([x, plane_value, z])
-                        
-            elif plane_name == 'Z=0':  # XY plane
-                plane_value = plane_info['value']
-                x_range = np.linspace(-range_size, range_size, grid_size)
-                y_range = np.linspace(-range_size, range_size, grid_size)
-                for x in x_range:
-                    for y in y_range:
-                        plane_points.append([x, y, plane_value])
-            
-            plane_points = np.array(plane_points)
-            
-            # Project plane points to image coordinates
-            plane_points_homogeneous = np.hstack([plane_points, np.ones((plane_points.shape[0], 1))])
-            plane_points_camera = (w2c @ plane_points_homogeneous.T).T
-            plane_points_pixels = (intrinsic @ plane_points_camera[:, :3].T).T
-            plane_points_pixels /= plane_points_pixels[:, 2:3]
-            pixel_coords = plane_points_pixels[:, :2]
-            
-            # Filter points that are visible in the image
-            valid_mask = (
-                (pixel_coords[:, 0] >= 0) & (pixel_coords[:, 0] < width) &
-                (pixel_coords[:, 1] >= 0) & (pixel_coords[:, 1] < height) &
-                (plane_points_camera[:, 2] > 0)  # Points in front of camera
-            )
-            
-            valid_pixel_coords = pixel_coords[valid_mask].astype(int)
-            
-            # Draw plane points
-            for coord in valid_pixel_coords:
-                cv2.circle(frame, tuple(coord), 1, color, -1)
-            
-            # Draw plane grid lines
-            for i in range(grid_size):
-                # Horizontal lines
-                for j in range(grid_size - 1):
-                    idx1 = i * grid_size + j
-                    idx2 = i * grid_size + j + 1
-                    if idx1 < len(plane_points) and idx2 < len(plane_points):
-                        coord1 = pixel_coords[idx1]
-                        coord2 = pixel_coords[idx2]
-                        if (valid_mask[idx1] and valid_mask[idx2] and 
-                            np.linalg.norm(coord1 - coord2) < 100):  # Avoid drawing very long lines
-                            cv2.line(frame, tuple(coord1.astype(int)), tuple(coord2.astype(int)), color, 1)
-                
-                # Vertical lines
-                for j in range(grid_size - 1):
-                    idx1 = j * grid_size + i
-                    idx2 = (j + 1) * grid_size + i
-                    if idx1 < len(plane_points) and idx2 < len(plane_points):
-                        coord1 = pixel_coords[idx1]
-                        coord2 = pixel_coords[idx2]
-                        if (valid_mask[idx1] and valid_mask[idx2] and 
-                            np.linalg.norm(coord1 - coord2) < 100):  # Avoid drawing very long lines
-                            cv2.line(frame, tuple(coord1.astype(int)), tuple(coord2.astype(int)), color, 1)
-        
-        # Add text labels
-        cv2.putText(frame, "Coordinate Planes:", (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(frame, "Red=X=0, Green=Y=0, Blue=Z=0", (10, 55), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        return frame
-
     
 
     def _find_closest_point(self, target_points):
@@ -1118,6 +983,12 @@ class InvPhyTrainerWarp:
         min_dist_per_ctrl_pts, min_indices = torch.min(dist_matrix, dim=1)
         min_idx = min_indices[torch.argmin(min_dist_per_ctrl_pts)]
         return self.structure_points[min_idx].unsqueeze(0)
+
+    def create_ground_plane(x_range=(-0.5, 0.5), y_range=(-0.5, 0.5), step=0.05, z=0.0):
+        xs = np.arange(x_range[0], x_range[1]+step, step)
+        ys = np.arange(y_range[0], y_range[1]+step, step)
+        plane_pts = np.array([[x, y, z] for x in xs for y in ys], dtype=np.float32)
+        return torch.tensor(plane_pts, device=cfg.device)
 
     def interactive_playground(
         self, model_path, gs_path, n_ctrl_parts=1, inv_ctrl=False, virtual_key_input=False
@@ -1156,7 +1027,7 @@ class InvPhyTrainerWarp:
             self.simulator.wp_states[0].wp_x, requires_grad=False
         ).clone()
 
-        vis_cam_idx = 0
+        vis_cam_idx = 23
         FPS = cfg.FPS
         width, height = cfg.WH
         intrinsic = cfg.intrinsics[vis_cam_idx]
@@ -1169,9 +1040,38 @@ class InvPhyTrainerWarp:
 
         gaussians = GaussianModel(sh_degree=3)
         gaussians.load_ply(gs_path)
+        print(f"gaussians._xyz shape: {gaussians._xyz.shape}")
+        # sys.exit()
         gaussians = remove_gaussians_with_low_opacity(gaussians, 0.1)
         gaussians.isotropic = True
-        current_pos = gaussians.get_xyz
+        current_pos = gaussians.get_xyz          # (N,3)
+        current_rot = gaussians.get_rotation     # (N,4) quaternion
+        current_opacity = gaussians.get_opacity 
+        gaussians._opacity = current_opacity + 10.0
+
+        R_motion = torch.tensor(cfg.T_world2marker[:3, :3], dtype=current_pos.dtype, device=cfg.device)
+        t_motion = torch.tensor(cfg.T_world2marker[:3, 3], dtype=current_pos.dtype, device=cfg.device)
+
+        # Transform positions
+        current_pos = (current_pos @ R_motion.T) + t_motion
+        gaussians._xyz = current_pos
+
+        current_rot = gaussians.get_rotation        # (N,4)
+        # q_motion = matrix_to_quaternion(R_motion)   # now already on correct device
+        # q_motion = q_motion.expand_as(current_rot)
+
+        # rot_new = quaternion_multiply(current_rot, q_motion)
+        # rot_new = rot_new / rot_new.norm(dim=1, keepdim=True)
+        # gaussians._rotation = rot_new
+        rot_world2marker = R.from_matrix(cfg.T_world2marker[:3, :3])
+        quat_world2marker = rot_world2marker.as_quat()
+        quats_world_scipy = np.roll(current_rot.detach().cpu().numpy(), -1, axis=1)
+        rots_world = R.from_quat(quats_world_scipy)
+        rot_world2marker_obg = R.from_quat(quat_world2marker)
+        rots_marker = rot_world2marker_obg * rots_world
+        quats_marker_scipy = rots_marker.as_quat()
+        quats_marker = np.roll(quats_marker_scipy, 1, axis=1)
+        gaussians._rotation = torch.tensor(quats_marker, dtype=current_rot.dtype, device=current_rot.device)
         current_rot = gaussians.get_rotation
         use_white_background = True  # set to True for white background
         bg_color = [1, 1, 1] if use_white_background else [0, 0, 0]
@@ -1235,7 +1135,6 @@ class InvPhyTrainerWarp:
         self.pressed_keys = set()
         self.w2c = w2c
         self.intrinsic = intrinsic
-        self.show_ground_plane = True  # Toggle for coordinate planes visualization
         self.init_control_ui()
         if n_ctrl_parts > 1:
             hand_positions = []
@@ -1386,19 +1285,6 @@ class InvPhyTrainerWarp:
 
             alpha = image[..., 3:4]
             rgb = image[..., :3] * 255
-            print(f"rgb shape: {rgb.shape}")
-            # downsample the frame to the same shape as rgb
-            # frame = cv2.resize(frame, (rgb.shape[1], rgb.shape[0]))
-            print(f"type frame: {type(frame)}")
-            
-            frame = F.interpolate(
-                frame.permute(2, 0, 1).unsqueeze(0),  # (1080,1920,3) → (1,3,1080,1920)
-                size=(720, 1280),                       # Target (height, width)
-                mode='bilinear',
-                align_corners=False
-            ).squeeze(0).permute(1, 2, 0)     
-            print(f"frame shape: {frame.shape}")
-            print(f"alpha shape: {alpha.shape}")
             frame = alpha * rgb + (1 - alpha) * frame
             frame = frame.cpu().numpy()
             image_mask = image_mask.cpu().numpy()
@@ -1419,34 +1305,7 @@ class InvPhyTrainerWarp:
                 x, intrinsic, w2c, width, height, image_mask, light_point=[-3, -0.5, -5]
             )
             frame[final_shadow] = (frame[final_shadow] * 0.98).astype(np.uint8)
-            
-            # Add coordinate planes visualization
-            if self.show_ground_plane:
-                frame = self._add_coordinate_planes_visualization(frame, intrinsic, w2c, width, height)
-            
-            # Add 3D particle visualization
-            particle_pos = getattr(self, 'particle_3d_pos', None)
-            # particle_pos = 
-            frame = self._add_3d_particle(frame, intrinsic, w2c, width, height, particle_pos)
-            
-            # Debug: Print coordinate system info
-            if frame_count % 30 == 0:  # Print every 30 frames
-                if hasattr(self, 'ground_transform') and self.ground_transform is not None:
-                    ground_normal = self.ground_transform[:3, 2]
-                    ground_position = self.ground_transform[:3, 3]
-                    print(f"Custom ground plane - Normal: {ground_normal}, Position: {ground_position}")
-                    print(f"Gravity direction: {getattr(self, 'gravity_direction', 'Not set')}")
-                else:
-                    print(f"Default ground plane at Y={0.18:.2f}m")
-                
-                print(f"Particle Y range: {x[:, 1].min():.3f} to {x[:, 1].max():.3f}")
-                print(f"Coordinate system: X={x[:, 0].min():.3f} to {x[:, 0].max():.3f}, Y={x[:, 1].min():.3f} to {x[:, 1].max():.3f}, Z={x[:, 2].min():.3f} to {x[:, 2].max():.3f}")
-                print(f"reverse_z setting: {cfg.reverse_z}")
-            
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-
-            # # Add a red dot to the frame
-            # cv2.circle(frame, (width//2, height//2), 10, (0, 0, 255), -1)  # Red dot at center
 
             cv2.imshow("Interactive Playground", frame)
             key = cv2.waitKey(1)
@@ -1459,9 +1318,6 @@ class InvPhyTrainerWarp:
                         # Store virtual key with timestamp - refresh timestamp if already pressed
                         self.virtual_keys[key_char] = time.time()
                         self.pressed_keys.add(key_char)
-                    elif key_char == 'g':  # Toggle coordinate planes visualization
-                        self.show_ground_plane = not self.show_ground_plane
-                        print(f"Coordinate planes visualization: {'ON' if self.show_ground_plane else 'OFF'}")
                     elif key == 27:  # ESC key to exit
                         break
                 
@@ -1599,6 +1455,7 @@ class InvPhyTrainerWarp:
 
         listener.stop()
 
+
     def _transform_gs(self, gaussians, M, majority_scale=1):
 
         new_gaussians = copy.copy(gaussians)
@@ -1688,7 +1545,7 @@ class InvPhyTrainerWarp:
 
         video_path = f"{cfg.base_dir}/force_visualization.mp4"
 
-        vis_cam_idx = 0
+        vis_cam_idx = 23
         FPS = cfg.FPS
         width, height = cfg.WH
         intrinsic = cfg.intrinsics[vis_cam_idx]
@@ -1774,7 +1631,7 @@ class InvPhyTrainerWarp:
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (cfg.WH[0], cfg.WH[1]))
 
-        frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_raw/{cfg.start_frame:06d}.png"
+        frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted/{cfg.start_frame:06d}.png"
         frame = cv2.imread(frame_path)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -1898,7 +1755,7 @@ class InvPhyTrainerWarp:
 
             prev_x = x.clone()
 
-            frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_raw/{i:06d}.png"
+            frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted/{i:06d}.png"
             frame = cv2.imread(frame_path)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -2030,7 +1887,7 @@ class InvPhyTrainerWarp:
 
         video_path = f"{cfg.base_dir}/material_visualization.mp4"
 
-        vis_cam_idx = 0
+        vis_cam_idx = 23
         FPS = cfg.FPS
         width, height = cfg.WH
         intrinsic = cfg.intrinsics[vis_cam_idx]
@@ -2066,7 +1923,7 @@ class InvPhyTrainerWarp:
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (cfg.WH[0], cfg.WH[1]))
 
-        frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_raw/{cfg.start_frame:06d}.png"
+        frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted/{cfg.start_frame:06d}.png"
         frame = cv2.imread(frame_path)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -2229,7 +2086,7 @@ class InvPhyTrainerWarp:
 
             prev_x = x.clone()
 
-            frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_raw/{i:06d}.png"
+            frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted/{i:06d}.png"
             frame = cv2.imread(frame_path)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 

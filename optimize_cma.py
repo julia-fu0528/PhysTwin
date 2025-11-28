@@ -34,25 +34,45 @@ if __name__ == "__main__":
     parser.add_argument("--case_name", type=str, required=True)
     parser.add_argument("--train_frame", type=int, required=True)
     parser.add_argument("--max_iter", type=int, default=20)
+    parser.add_argument("--start_iter", type=int, default=0, help="Iteration to start from (for resuming)")
     args = parser.parse_args()
 
     base_path = args.base_path
     case_name = args.case_name
     train_frame = args.train_frame
     max_iter = args.max_iter
+    start_iter = args.start_iter
 
-    # if "cloth" in case_name or "package" in case_name:
-    cfg.load_from_yaml("configs/cloth.yaml")
-    # else:
-    #     cfg.load_from_yaml("configs/real.yaml")
+    if "cloth" in case_name or "package" in case_name:
+        cfg.load_from_yaml("configs/cloth.yaml")
+    else:
+        cfg.load_from_yaml("configs/real.yaml")
 
-    base_dir = f"experiments_optimization/{case_name}"
-    T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.44515172e-01],
-                              [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  5.80970610e-01],
-                              [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  4.01065390e-01],
-                              [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+    base_dir = f"{base_path}/experiments_optimization/{case_name}"
+    # T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
+    #                           [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
+    #                           [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+    #                           [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+    # T_marker2world = np.array([[ -9.99395190e-01, 8.67378464e-03, 3.36752118e-02,  0.07659089],
+    #                           [ 2.32605437e-02, -5.53114078e-01, 8.32780742e-01,  -0.33260573],
+    #                           [ 2.58495945e-02, 8.33060371e-01, 5.52577792e-01,  -0.38696501],
+    #                           [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+    # Load avg_marker2world from multi-camera ArUco calibration (read_aruco.py)
+    # This is more accurate than single-camera calibration as it averages across all cameras
+    aruco_results_path = '/users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco/aruco_results/avg_marker2world.npy'
+    if os.path.exists(aruco_results_path):
+        T_marker2world = np.load(aruco_results_path)
+        print(f"Loaded T_marker2world from ArUco calibration: {aruco_results_path}")
+    else:
+        # Fallback to old hardcoded value if file doesn't exist
+        print(f"Warning: ArUco calibration file not found at {aruco_results_path}, using fallback value")
+        T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
+                                  [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
+                                  [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+                                  [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
     # invert the ground transform
     T_world2marker = np.linalg.inv(T_marker2world)
+    # T_world2marker = T_marker2world
     # Set the intrinsic and extrinsic parameters for visualization
     with open(f"{base_path}/{case_name}/calibrate.pkl", "rb") as f:
         c2ws = pickle.load(f)
@@ -80,4 +100,4 @@ if __name__ == "__main__":
         base_dir=base_dir,
         train_frame=train_frame,
     )
-    optimizer.optimize(max_iter=max_iter)
+    optimizer.optimize(max_iter=max_iter, start_iter=start_iter)

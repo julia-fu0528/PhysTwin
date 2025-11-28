@@ -20,12 +20,15 @@ from ..utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 import open3d as o3d
 import numpy as np
 import torch
+import sys
 
 class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0]):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0],
+                 load_coarse=False,
+                 brics=True, start_frame=0, end_frame=60000, num_frames=60000):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -43,7 +46,9 @@ class Scene:
         self.train_cameras = {}
         self.test_cameras = {}
 
-        if os.path.exists(os.path.join(args.source_path, "sparse")):
+        if brics:
+            scene_info = sceneLoadTypeCallbacks["brics"](args.source_path, args.white_background, args.eval, start_frame=start_frame, end_frame=end_frame, num_frames=num_frames)    
+        elif os.path.exists(os.path.join(args.source_path, "sparse")):
             scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.depths, args.eval, args.train_test_exp)
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
@@ -76,17 +81,21 @@ class Scene:
 
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
-            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, scene_info.is_nerf_synthetic, False)
+            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
             print("Loading Test Cameras")
-            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, scene_info.is_nerf_synthetic, True)
+            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
 
         self.gaussians.isotropic = args.isotropic
 
         if self.loaded_iter:
+            print(f"model_path: {self.model_path}")
+            # self.gaussians.load_ply(os.path.join(self.model_path,
+            #                                                "point_cloud",
+            #                                                "iteration_" + str(self.loaded_iter),
+            #                                                "point_cloud.ply"))
             self.gaussians.load_ply(os.path.join(self.model_path,
-                                                           "point_cloud",
-                                                           "iteration_" + str(self.loaded_iter),
-                                                           "point_cloud.ply"), args.train_test_exp)
+                                                           "pcd_4dgs1111",
+                                                           f"frame_{self.loaded_iter:06d}_time_0.000000.ply"))
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, scene_info.train_cameras, self.cameras_extent)
 

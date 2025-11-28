@@ -4,6 +4,7 @@ import torch
 import time
 import cv2
 from .config import cfg
+from . import logger
 import pyrender
 import trimesh
 import os   
@@ -18,7 +19,8 @@ def visualize_pc(
     visualize=True,
     save_video=False,
     save_path=None,
-    vis_cam_idx=0,
+    vis_cam_idx=23,
+    return_frames=False,
 ):
     print(f"calling visualize_pc")
     # Deprecated function, use visualize_pc instead
@@ -63,18 +65,60 @@ def visualize_pc(
 
     # The pcs is a 4d pcd numpy array with shape (n_frames, n_points, 3)
     vis = o3d.visualization.Visualizer()
-    # vis.create_window(visible=visualize, width=width, height=height)
-    vis.create_window(visible=True, width=width, height=height)
+    vis.create_window(visible=visualize, width=width, height=height)
+    # vis.create_window(visible=visualize and not return_frames, width=width, height=height)
+    # === Add Ground Plane at z=0 ===
+    plane_color = [0.5, 0.5, 0.5]  # light gray
+    plane_x = np.arange(-0.8, 0.8, 0.01)
+    plane_y = np.arange(-0.8, 0.8, 0.01)
+    plane_points = np.array([[x, y, 0] for x in plane_x for y in plane_y])
 
-    if save_video and visualize:
-        raise ValueError("Cannot save video and visualize at the same time.")
+    ground_plane = o3d.geometry.PointCloud()
+    ground_plane.points = o3d.utility.Vector3dVector(plane_points)
+    ground_plane.colors = o3d.utility.Vector3dVector(np.tile(plane_color, (plane_points.shape[0], 1)))
 
+    # vis.add_geometry(ground_plane)
+    # T_marker2world = np.linalg.inv(cfg.T_world2marker)
+    # T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
+    #                           [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
+    #                           [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+    #                           [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+    # origin = T_marker2world[:3, 3]
+    # axis_len = 1
+    # x_end = origin + T_marker2world[:3, 0] * axis_len
+    # y_end = origin + T_marker2world[:3, 1] * axis_len
+    # z_end = origin + T_marker2world[:3, 2] * axis_len
+    # x_axis = o3d.geometry.LineSet(
+    #     points=o3d.utility.Vector3dVector([origin, x_end]),
+    #     lines=o3d.utility.Vector2iVector([[0, 1]]),
+    # )
+    # x_axis.paint_uniform_color([1, 0, 0])
+    # vis.add_geometry(x_axis)
+    # y_axis = o3d.geometry.LineSet(
+    #     points=o3d.utility.Vector3dVector([origin, y_end]),
+    #     lines=o3d.utility.Vector2iVector([[0, 1]]),
+    # )
+    # y_axis.paint_uniform_color([0, 1, 0])
+    # vis.add_geometry(y_axis)
+    # z_axis = o3d.geometry.LineSet(
+    #     points=o3d.utility.Vector3dVector([origin, z_end]),
+    #     lines=o3d.utility.Vector2iVector([[0, 1]]),
+    # )
+    # z_axis.paint_uniform_color([0, 0, 1])
+    # vis.add_geometry(z_axis)
+
+    # if save_video and visualize:
+    #     raise ValueError("Cannot save video and visualize at the same time.")
     # Initialize video writer if save_video is True
     if save_video:
         # fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(save_path, fourcc, FPS, (width, height))
         # video_writer = cv2.VideoWriter(save_path, fourcc, FPS, (width, height))
+    
+    # Initialize frames list if return_frames is True
+    if return_frames:
+        frames = []
 
     if controller_points is not None:
         controller_meshes = []
@@ -134,20 +178,25 @@ def visualize_pc(
 
         cameras = [subdir for subdir in os.listdir(cfg.overlay_path) if "cam" in subdir]
         print(f"cameras: {cameras}")
-        # Capture frame and write to video file if save_video is True
-        if save_video:
+        # Capture frame and write to video file if save_video is True, or collect if return_frames
+        if save_video or return_frames:
             frame = np.asarray(vis.capture_screen_float_buffer(do_render=True))
             frame = (frame * 255).astype(np.uint8)
             if cfg.overlay_path is not None:
                 frame_num = cfg.start_frame + i
                 mask = np.all(frame == [255, 255, 255], axis=-1)
-                image_path = f"{cfg.overlay_path}/{cameras[vis_cam_idx]}/undistorted_raw/{frame_num:06d}.png"
+                image_path = f"{cfg.overlay_path}/{cameras[vis_cam_idx]}/undistorted/{frame_num:06d}.png"
                 overlay = cv2.imread(image_path)
-                overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-                frame[mask] = overlay[mask]  # Replace background
-            # Convert RGB to BGR
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            video_writer.write(frame)
+                if overlay is not None:
+                    overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+                    frame[mask] = overlay[mask]  # Replace background
+            if save_video:
+                # Convert RGB to BGR for video writer
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                video_writer.write(frame_bgr)
+            if return_frames:
+                # Keep RGB format for frames list
+                frames.append(frame)
 
         if visualize:
             time.sleep(1 / FPS)
@@ -155,3 +204,101 @@ def visualize_pc(
     vis.destroy_window()
     if save_video:
         video_writer.release()
+    if return_frames:
+        return frames
+
+
+def visualize_pc_grid(
+    object_points,
+    object_colors=None,
+    controller_points=None,
+    object_visibilities=None,
+    object_motions_valid=None,
+    save_video=False,
+    save_path=None,
+    vis_cam_indices=None,
+    grid_cols=None,
+):
+    """
+    Visualize point cloud from multiple camera views in a grid layout.
+    """
+    FPS = cfg.FPS
+    width, height = cfg.WH
+    
+    # Get camera indices
+    if vis_cam_indices is None:
+        num_cameras = len(cfg.intrinsics)
+        vis_cam_indices = list(range(num_cameras))
+    
+    num_cameras = len(vis_cam_indices)
+    
+    # Calculate grid layout
+    if grid_cols is None:
+        grid_cols = int(np.ceil(np.sqrt(num_cameras)))
+    grid_rows = int(np.ceil(num_cameras / grid_cols))
+    
+    # Calculate individual view size
+    view_width = width // grid_cols
+    view_height = height // grid_rows
+    
+    # Output video size
+    output_width = view_width * grid_cols
+    output_height = view_height * grid_rows
+    
+    logger.info(f"Visualizing point cloud from {num_cameras} cameras in {grid_rows}x{grid_cols} grid layout.")
+    
+    # Collect frames from each camera
+    all_camera_frames = []
+    for vis_cam_idx in vis_cam_indices:
+        frames = visualize_pc(
+            object_points,
+            object_colors,
+            controller_points,
+            object_visibilities,
+            object_motions_valid,
+            visualize=True,
+            save_video=True,
+            save_path=save_path.replace(".mp4", f"_camera_{vis_cam_idx}.mp4"),
+            return_frames=True,
+            vis_cam_idx=vis_cam_idx,
+        )
+        all_camera_frames.append(frames)
+    
+    # Combine frames into grid for each timestep
+    num_frames = len(all_camera_frames[0])
+    
+    # Initialize video writer
+    if save_video:
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        video_writer = cv2.VideoWriter(save_path, fourcc, FPS, (output_width, output_height))
+    
+    for frame_idx in range(num_frames):
+        # Create grid frame
+        grid_frame = np.zeros((output_height, output_width, 3), dtype=np.uint8)
+        
+        for cam_idx_idx, vis_cam_idx in enumerate(vis_cam_indices):
+            row = cam_idx_idx // grid_cols
+            col = cam_idx_idx % grid_cols
+            
+            y_start = row * view_height
+            y_end = y_start + view_height
+            x_start = col * view_width
+            x_end = x_start + view_width
+            
+            # Get frame from this camera
+            frame = all_camera_frames[cam_idx_idx][frame_idx]
+            
+            # Resize frame to fit grid cell if needed
+            if frame.shape[0] != view_height or frame.shape[1] != view_width:
+                frame = cv2.resize(frame, (view_width, view_height))
+            
+            grid_frame[y_start:y_end, x_start:x_end] = frame
+        
+        # Write to video
+        if save_video:
+            grid_frame_bgr = cv2.cvtColor(grid_frame, cv2.COLOR_RGB2BGR)
+            video_writer.write(grid_frame_bgr)
+    
+    if save_video:
+        video_writer.release()
+        logger.info(f"Saved grid video to {save_path}")

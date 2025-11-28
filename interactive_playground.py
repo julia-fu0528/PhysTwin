@@ -70,11 +70,19 @@ if __name__ == "__main__":
     ), f"{case_name}: Optimal parameters not found: {optimal_path}"
     with open(optimal_path, "rb") as f:
         optimal_params = pickle.load(f)
-    cfg.set_optimal_params(optimal_params)
+    cfg.set_optimal_params(optimal_params)  
+    T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
+                              [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
+                              [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+                              [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+    # invert the ground transform
+    T_world2marker = np.linalg.inv(T_marker2world)
+    cfg.T_world2marker = T_world2marker
 
     # Set the intrinsic and extrinsic parameters for visualization
     with open(f"{base_path}/{case_name}/calibrate.pkl", "rb") as f:
         c2ws = pickle.load(f)
+    c2ws = [T_world2marker @ c2w for c2w in c2ws]
     w2cs = [np.linalg.inv(c2w) for c2w in c2ws]
     cfg.c2ws = np.array(c2ws)
     cfg.w2cs = np.array(w2cs)
@@ -89,14 +97,8 @@ if __name__ == "__main__":
 
     exp_name = "init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0"
     # gaussians_path = f"{args.gaussian_path}/{case_name}/{exp_name}/point_cloud/iteration_10000/point_cloud.ply"
-    gaussians_path = sorted(glob.glob(f"{base_path}/{case_name}/pcd/frame_020000_time_*.ply"))[cfg.start_frame]
-    T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.44515172e-01],
-                              [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  5.80970610e-01],
-                              [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  4.01065390e-01],
-                              [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
-    # invert the ground transform
-    T_world2marker = np.linalg.inv(T_marker2world)
-    cfg.T_world2marker = T_world2marker
+    gaussians_path = sorted(glob.glob(f"{base_path}/{case_name}/pcd/unfiltered_frame_014000_time_*.ply"))[0]
+    # gaussians_path = "base_cloth.ply"
     # gaussians_path = f"{base_path}/{case_name}/start_obj_pcd.ply"
     logger.set_log_file(path=base_dir, name="inference_log")
     trainer = InvPhyTrainerWarp(

@@ -20,7 +20,7 @@ from gaussian_splatting.utils.general_utils import safe_state
 from argparse import ArgumentParser
 from gaussian_splatting.arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_splatting.gaussian_renderer import GaussianModel
-
+import sys
 try:
     from diff_gaussian_rasterization import SparseGaussianAdam
 
@@ -58,12 +58,12 @@ def render_set(
     separate_sh,
     disable_sh=False,
 ):
-
+    print(f"views shape: {len(views)}")
     render_path = os.path.join(output_path, name)
     makedirs(render_path, exist_ok=True)
 
     # view_indices = [0, 25, 50, 75, 100, 125]
-    view_indices = [0, 50, 100]
+    view_indices = [0, 1, 23]
     selected_views = [views[i] for i in view_indices]
 
     for idx, view in enumerate(tqdm(selected_views, desc="Rendering progress")):
@@ -83,7 +83,8 @@ def render_set(
                     pipeline,
                     background,
                     override_color=override_color,
-                    use_trained_exp=train_test_exp,
+                    # use_trained_exp=train_test_exp,
+                    use_trained_exp=False,
                     separate_sh=separate_sh,
                 )
             else:
@@ -92,7 +93,8 @@ def render_set(
                     gaussians,
                     pipeline,
                     background,
-                    use_trained_exp=train_test_exp,
+                    # use_trained_exp=train_test_exp,
+                    use_trained_exp=False,
                     separate_sh=separate_sh,
                 )
 
@@ -114,7 +116,12 @@ def render_sets(
     remove_gaussians: bool = False,
     name: str = "dynamic",
     output_dir: str = "./gaussian_output_dynamic",
+    start_frame: int = 0,
+    end_frame: int = 60000,
+    num_frames: int = 60000,
+    render_all_frames: bool = True,
 ):
+    print(f"output_dir: {output_dir}")
     with torch.no_grad():
         output_path = output_dir
 
@@ -122,7 +129,7 @@ def render_sets(
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         gaussians = GaussianModel(dataset.sh_degree)
-        scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
+        scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, start_frame=start_frame, end_frame=end_frame, num_frames=num_frames)
 
         # remove gaussians that are outside the mask
         if remove_gaussians:
@@ -136,16 +143,26 @@ def render_sets(
 
         # rollout
         exp_name = dataset.source_path.split("/")[-1]
-        ctrl_pts_path = f"./experiments/{exp_name}/inference.pkl"
+        ctrl_pts_path = f"{'/'.join(dataset.source_path.split('/')[:-1])}/experiments/{exp_name}/inference.pkl"
+        print(f"ctrl_pts_path: {ctrl_pts_path}")
         with open(ctrl_pts_path, "rb") as f:
             ctrl_pts = pickle.load(f)  # (n_frames, n_ctrl_pts, 3) ndarray
         ctrl_pts = torch.tensor(ctrl_pts, dtype=torch.float32, device="cuda")
+        # print the delta between all consecutive ctrl_pts
+        # for i in range(1, len(ctrl_pts)):
+        #     print(f"delta between ctrl_pts {i} and {i-1}: {ctrl_pts[i] - ctrl_pts[i-1]}")
 
         xyz_0 = gaussians.get_xyz
+        print(f"xyz_0 shape: {xyz_0.shape}")
         rgb_0 = gaussians.get_features_dc.squeeze(1)
+        print(f"rgb_0 shape: {rgb_0.shape}")
         quat_0 = gaussians.get_rotation
+        print(f"quat_0 shape: {quat_0.shape}")
         opa_0 = gaussians.get_opacity
+        print(f"opa_0 shape: {opa_0.shape}")
         scale_0 = gaussians.get_scaling
+        print(f"scale_0 shape: {scale_0.shape}")
+        
 
         # print(gaussians.get_features_dc.shape)   # (N, 1, 3)
         # print(gaussians.get_features_rest.shape) # (N, 15, 3)
@@ -207,18 +224,34 @@ def render_sets(
             gaussians_i._scaling = gaussians._scaling
             gaussians_list.append(gaussians_i)
 
-        views = scene.getTestCameras()
-
+        # Option to render both training and test cameras, or just test cameras
+        # views = scene.getTestCameras()
+        # print(f"test views shape: {len(views)}")
+        views = scene.getTrainCameras()
+        print(f"train views shape: {len(views)}")
+        
+        # if render_all_frames:
+        #     # Combine training and test cameras to render all frames
+        #     all_views = train_views + views
+        #     print(f"Rendering {len(train_views)} training cameras and {len(views)} test cameras (total: {len(all_views)})")
+        #     views_to_render = all_views
+        # else:
+        # Only render test cameras (original behavior)
+        print(f"Rendering {len(views)} test cameras only")
+        views_to_render = views
+        
         render_set(
             output_path,
             name,
-            views,
+            views_to_render,
             gaussians_list,
             pipeline,
             background,
-            dataset.train_test_exp,
+            # dataset.train_test_exp,
+            False,
             separate_sh,
-            disable_sh=dataset.disable_sh,
+            # disable_sh=dataset.disable_sh,
+            disable_sh=False,
         )
 
 
@@ -240,12 +273,16 @@ def rollout(xyz_0, rgb_0, quat_0, opa_0, ctrl_pts, n_steps, device="cuda"):
 
         prev_particle_pos = ctrl_pts[i - 1]
         cur_particle_pos = ctrl_pts[i]
+        print(f"prev_particle_pos: {prev_particle_pos}")
+        print(f"cur_particle_pos: {cur_particle_pos}")
+        print(f"delta between prev_particle_pos and cur_particle_pos: {cur_particle_pos - prev_particle_pos}")
 
         # relations = get_topk_indices(prev_particle_pos, K=16)
 
         # interpolate all_pos and particle_pos
         chunk_size = 20_000
         num_chunks = (len(all_pos) + chunk_size - 1) // chunk_size
+        print(f"num_chunks: {num_chunks}")
         for j in range(num_chunks):
             start = j * chunk_size
             end = min((j + 1) * chunk_size, len(all_pos))
@@ -265,6 +302,11 @@ def rollout(xyz_0, rgb_0, quat_0, opa_0, ctrl_pts, n_steps, device="cuda"):
 
         quat[i] = all_rot.cpu()
         xyz[i] = all_pos.cpu()
+        # if i > 200:
+        #     print(f"delta between xyz[{i}] and xyz[{i-1}]: {xyz[i] - xyz[i-1]}")
+        #     print(f"sum of delta between xyz[{i}] and xyz[0]: {(xyz[i] - xyz[0]).sum()}")
+        #     print(f"delta between xzy[{i}] and xyz[0]: {xyz[i] - xyz[0]}")
+        #     print(f"sum of delta between xzy[{i}] and xyz[0]: {(xyz[i] - xyz[0]).sum()}")
         rgb[i] = rgb[i - 1].clone()
         opa[i] = opa[i - 1].clone()
 
@@ -283,6 +325,10 @@ if __name__ == "__main__":
     parser.add_argument("--remove_gaussians", action="store_true")
     parser.add_argument("--name", default="sceneA", type=str)
     parser.add_argument("--output_dir", default="./gaussian_output_dynamic", type=str)
+    parser.add_argument("--start_frame", type=int, default=0)
+    parser.add_argument("--end_frame", type=int, default=60000)
+    parser.add_argument("--num_frames", type=int, default=60000)
+    parser.add_argument("--render_all_frames", action="store_true", help="Render both training and test frames (default: only test frames)")
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 
@@ -299,6 +345,10 @@ if __name__ == "__main__":
         args.remove_gaussians,
         args.name,
         args.output_dir,
+        args.start_frame,
+        args.end_frame,
+        args.num_frames,
+        args.render_all_frames,
     )
 
     with open("./rendering_finished_dynamic.txt", "a") as f:

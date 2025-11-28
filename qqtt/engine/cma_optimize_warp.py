@@ -36,7 +36,7 @@ class OptimizerCMA:
         self.init_velocities = None
         # Load the data
         if cfg.data_type == "real":
-            self.dataset = RealData(visualize=False)
+            self.dataset = RealData(visualize=False, use_grid=False, vis_cam_indices=None)
             # Get the object points and controller points
             self.object_points = self.dataset.object_points
             self.object_colors = self.dataset.object_colors
@@ -201,7 +201,7 @@ class OptimizerCMA:
         assert min < max, "The minimum value should be less than the maximum value"
         return value * (max - min) + min
 
-    def optimize(self, max_iter=100):
+    def optimize(self, max_iter=100, start_iter=0):
         # Initialize the parameters
         init_global_spring_Y = self.normalize(
             cfg.init_spring_Y, cfg.spring_Y_min, cfg.spring_Y_max
@@ -234,17 +234,38 @@ class OptimizerCMA:
             init_drag_damping,
             init_dashpot_damping,
         ]
-        print(f"before saving optimizeCMA/init.mp4")
-        self.error_func(
-            x_init, visualize=True, video_path=f"{cfg.base_dir}/optimizeCMA/init.mp4"
-        )
-        print(f"after saving optimizeCMA/init.mp4")
         
-        std = 1 / 6
-        es = cma.CMAEvolutionStrategy(x_init, std, {"bounds": [0.0, 1.0], "seed": 42})
+        # Checkpoint path
+        checkpoint_dir = f"{cfg.base_dir}/optimizeCMA"
+        checkpoint_path = f"{checkpoint_dir}/cma_checkpoint.pkl"
+        
+        # Try to load checkpoint if resuming
+        if start_iter > 0:
+            if os.path.exists(checkpoint_path):
+                logger.info(f"Loading checkpoint from {checkpoint_path}")
+                with open(checkpoint_path, 'rb') as f:
+                    checkpoint = pickle.load(f)
+                    es = checkpoint['es']
+                    saved_iter = checkpoint.get('iteration', start_iter)
+                    logger.info(f"Resumed from iteration {saved_iter}")
+                    start_iter = saved_iter
+            else:
+                logger.warning(f"Checkpoint not found at {checkpoint_path}, starting from beginning")
+                start_iter = 0
+        
+        # Initialize CMA-ES if not resuming
+        if start_iter == 0:
+            print(f"before saving optimizeCMA/init.mp4")
+            self.error_func(
+                x_init, visualize=True, video_path=f"{cfg.base_dir}/optimizeCMA/init.mp4"
+            )
+            print(f"after saving optimizeCMA/init.mp4")
+            
+            std = 1 / 6
+            es = cma.CMAEvolutionStrategy(x_init, std, {"bounds": [0.0, 1.0], "seed": 42})
         
         # Custom optimization loop to save videos after each iteration
-        for iteration in range(max_iter):
+        for iteration in range(start_iter, max_iter):
             logger.info(f"Starting iteration {iteration + 1}/{max_iter}")
             
             # Run one iteration of CMA-ES
@@ -266,6 +287,11 @@ class OptimizerCMA:
             
             # Log progress
             logger.info(f"Saved video: {video_path}")
+            
+            # Save checkpoint after each iteration
+            checkpoint = {'es': es, 'iteration': iteration + 1}
+            with open(checkpoint_path, 'wb') as f:
+                pickle.dump(checkpoint, f)
 
         # Get the results
         res = es.result
@@ -464,7 +490,7 @@ class OptimizerCMA:
                 visualize=False,
                 save_video=True,
                 save_path=video_path,
-                vis_cam_idx=19,
+                vis_cam_idx=23,
             )
             print(f"Real data shape: {self.dataset.object_points.shape}")
             print(f"Simulation data shape: {vertices.shape}")

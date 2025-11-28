@@ -53,8 +53,10 @@ def render_gsplat(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.T
                 [focal_length_x, 0, viewpoint_camera.image_width / 2.0],
                 [0, focal_length_y, viewpoint_camera.image_height / 2.0],
                 [0, 0, 1],
-            ]
-        ).to(pc.get_xyz)
+            ],
+            device=pc.get_xyz.device,
+            dtype=torch.float32
+        )
 
     means3D = pc.get_xyz
     opacity = pc.get_opacity
@@ -72,6 +74,9 @@ def render_gsplat(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.T
         sh_degree = pc.active_sh_degree
 
     viewmat = viewpoint_camera.world_view_transform.transpose(0, 1) # [4, 4]
+    # Ensure viewmat is on CUDA
+    if not viewmat.is_cuda:
+        viewmat = viewmat.cuda()
 
     rasterize_mode = 'classic' if not antialiased else 'antialiased'
 

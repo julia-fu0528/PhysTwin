@@ -29,11 +29,14 @@ from pathlib import Path
 from plyfile import PlyData, PlyElement
 from ..utils.sh_utils import SH2RGB
 from ..scene.gaussian_model import BasicPointCloud
-
+from typing import Optional
 import pickle
 import trimesh
 import open3d as o3d
 import cv2
+from ..utils.brics_utils import qvec2rotmat, focal2fov, read_params, get_extr, vis_extr
+
+
 
 
 def as_mesh(scene_or_mesh):
@@ -75,33 +78,52 @@ def as_mesh(scene_or_mesh):
     return mesh
 
 
+# class CameraInfo(NamedTuple):
+#     uid: int
+#     R: np.array
+#     T: np.array
+#     FovY: np.array
+#     FovX: np.array
+#     depth_params: dict
+#     image_path: str
+#     image_name: str
+#     depth_path: str
+#     width: int
+#     height: int
+#     is_test: bool
+#     image: np.array = None
+#     normal: np.array = None
+#     depth: np.array = None
+#     K: np.array = None
+#     occ_mask: np.array = None
 class CameraInfo(NamedTuple):
     uid: int
     R: np.array
     T: np.array
     FovY: np.array
     FovX: np.array
-    depth_params: dict
+    image: np.array
     image_path: str
     image_name: str
-    depth_path: str
     width: int
     height: int
-    is_test: bool
-    image: np.array = None
-    normal: np.array = None
-    depth: np.array = None
+    time : float
+    time_idx: int
+    view_idx: int
+    # mask: np.array
+    mask_path: str
     K: np.array = None
-    occ_mask: np.array = None
+    white_background: Optional[bool] = True
 
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
     train_cameras: list
     test_cameras: list
+    video_cameras: list
     nerf_normalization: dict
     ply_path: str
-    is_nerf_synthetic: bool
+    maxtime: int
 
 
 def getNerfppNorm(cam_info):
@@ -878,9 +900,132 @@ def sample_pcd_from_mesh(mesh_path, POINT_PER_TRIANGLE=5):
 
     return sampled_points, sampled_colors, sampled_normals
 
+def readBRICSCameras(params, images_folder, white_background, start_idx, end_idx, num_frames):
+    cam_infos = []
+    for idx, param in enumerate(params):
+        print(f"reading camera {idx} of {len(params)}")
+        mask_path = os.path.join(images_folder, param["cam_name"], 'mask_optim.zarr')
+        if not os.path.exists(os.path.join(images_folder, param["cam_name"])):
+            print(f"camera {param['cam_name']} not found")
+            continue
+        if not os.path.exists(mask_path):
+            print(f"mask {mask_path} not found")
+            continue
+        print(f"camera {param['cam_name']} found")
+
+        height = param["height"] 
+        width = param["width"] 
+
+        uid = param["cam_id"] # ??
+        qvec = np.asarray([param["qvecw"], param["qvecx"], param["qvecy"], param["qvecz"]]) # colmap c2w
+        tvec = np.asarray([param["tvecx"], param["tvecy"], param["tvecz"]])
+
+        R = np.transpose(qvec2rotmat(-qvec))
+        T = np.array(tvec)
+        # Convert camera-to-world (c2w) to world-to-camera (w2c) for 3DGS
+        # Standard colmap format: transpose of c2w rotation gives w2c rotation
+        # R_c2w = qvec2rotmat(qvec)
+        # R = np.transpose(R_c2w)
+        # # For w2c translation: T_w2c = -R_w2c @ T_c2w
+        # T = -R @ tvec
+
+        focal_length_x = param["fx"]
+        focal_length_y = param["fy"]
+        cx = param["cx"]
+        cy = param["cy"]
+        FovY = focal2fov(focal_length_y, height)
+        FovX = focal2fov(focal_length_x, width)
+
+        intr = np.eye(3)
+        intr[0, 0] = param["fx"]
+        intr[1, 1] = param["fy"]
+        intr[0, 2] = cx
+        intr[1, 2] = cy
+        dist = np.asarray([param["k1"], param["k2"], param["p1"], param["p2"]])
+        
+        for img_idx in range(start_idx, end_idx):
+            image_path = os.path.join(images_folder, param["cam_name"], 'undistorted',str(img_idx).zfill(6) + '.png')
+            if os.path.exists(image_path):
+                image_name = os.path.basename(image_path).split(".")[0]
+                image = None
+                    
+                num = np.float64(img_idx)
+                den = np.float64(num_frames)
+                time = float(num / den)
+                uid = img_idx
+                cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image, image_path=image_path, 
+                                    image_name=image_name, width=int(width), height=int(height), 
+                                    time = time, mask_path = mask_path, time_idx = img_idx, K=intr,
+                                    white_background=white_background, view_idx=idx)
+                cam_infos.append(cam_info)
+
+    return cam_infos
+
+def readBricsSceneInfo(path, white_background, eval, extension=".png", start_frame=0, end_frame=20000, num_frames=20000):
+    images_folder = path
+    filename = 'metric_params_undistorted.txt'
+    params = read_params(os.path.join(images_folder, '..', filename))
+    
+    print(f"filename: {filename}")
+    cam0 = params[0]["cam_name"]
+    cam0_dir = os.path.join(images_folder, cam0)
+    # n_frames = len([frame for frame in os.listdir(os.path.join(cam0_dir, "undistorted")) if frame.endswith(".png")])
+    interval = end_frame - start_frame
+    print("Reading Training Transforms")
+    # train_cam_infos = readCamerasFromTransforms(
+        # path, "transforms_train.json", white_background, extension)
+    train_end = int(interval * 0.99) + start_frame
+    print(f"interval: {interval}")
+    print(f"start_frame: {start_frame}")
+    print(f"end_frame: {end_frame}")
+    print(f"train_end: {train_end}")
+    print(f"num_frames: {num_frames}")
+    train_cam_infos = readBRICSCameras(params, images_folder, white_background, 0, 1, num_frames)
+    print("Reading Test Transforms")
+    # test_cam_infos = readCamerasFromTransforms(
+    #     path, "transforms_test.json", white_background, extension)
+    test_cam_infos = readBRICSCameras(params, images_folder, white_background, 0, 1, num_frames)
+    test_cam_infos = []
+    if not eval:
+        train_cam_infos.extend(test_cam_infos)
+        test_cam_infos = []
+    
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+    # nerf_normalization = getNerfppNorm(test_cam_infos)
+
+    ply_path = os.path.join(path, "points3d.ply")
+    print(f"exists> {os.path.exists(ply_path)}")
+    if not os.path.exists(ply_path):
+        # Since this data set has no colmap data, we start with random points
+        # num_pts = 25_000
+        num_pts = 15_000
+        print(f"Generating random point cloud ({num_pts})...")
+
+        # We create random points inside the bounds of the synthetic Blender scenes
+        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+        shs = np.random.random((num_pts, 3)) / 255.0
+        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(
+            shs), normals=np.zeros((num_pts, 3)))
+
+        storePly(ply_path, xyz, SH2RGB(shs) * 255)
+    try:
+        pcd = fetchPly(ply_path)
+    except:
+        pcd = None
+
+    scene_info = SceneInfo(point_cloud=pcd,
+                           train_cameras=train_cam_infos,
+                           test_cameras=test_cam_infos,
+                           video_cameras=train_cam_infos,
+                           maxtime=0,
+                           nerf_normalization=nerf_normalization,
+                           ply_path=ply_path)
+    return scene_info
 
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
     "Blender": readNerfSyntheticInfo,
     "QQTT": readQQTTSceneInfo,
+    "brics": readBricsSceneInfo,
 }

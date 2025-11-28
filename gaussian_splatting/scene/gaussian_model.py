@@ -102,10 +102,14 @@ class GaussianModel:
 
     @property
     def get_scaling(self):
-        # if self.isotropic:
-        #     return self.scaling_activation(self._scaling).repeat(1, 3)
-        # else:
-        return self.scaling_activation(self._scaling)
+        scaling = self.scaling_activation(self._scaling)
+        # For isotropic Gaussians: if scaling is [N, 1], repeat to [N, 3]
+        if self.isotropic and scaling.shape[1] == 1:
+            return scaling.repeat(1, 3)
+        # For anisotropic: ensure shape is [N, 3]
+        elif scaling.shape[1] == 1:
+            return scaling.repeat(1, 3)
+        return scaling
     
     @property
     def get_rotation(self):
@@ -316,11 +320,21 @@ class GaussianModel:
         for idx, attr_name in enumerate(scale_names):
             scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
         
+        # Handle case where no scales found - initialize with default values
+        if scales.shape[1] == 0:
+            print(f"Warning: No scale properties found in PLY file, initializing with default scales")
+            # Initialize with small default scale (will be activated by scaling_activation)
+            # Use negative value so after exp() activation it becomes small
+            scales = np.ones((xyz.shape[0], 1)) * -5.0  # Small scale after activation
+        
         # Handle case where there are more than 3 scale dimensions (e.g., 9D scaling)
         # Take only the first 3 dimensions to match expected format
         if scales.shape[1] > 3:
             print(f"Warning: Found {scales.shape[1]} scale dimensions, taking only the first 3")
             scales = scales[:, :3]
+        
+        # Ensure we have at least 1 dimension (should be guaranteed by above check)
+        assert scales.shape[1] > 0, f"Scales must have at least 1 dimension, got shape {scales.shape}"
 
         rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rot")]
         rot_names = sorted(rot_names, key = lambda x: int(x.split('_')[-1]))

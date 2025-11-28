@@ -49,6 +49,8 @@ class Config:
 
         # Other parameters for visualization
         self.overlay_path = None
+        self.vis_cam_indices = None  # List of camera indices for grid visualization. None = use all cameras
+        self.use_grid_gt = False  # Whether to use grid layout for GT visualization
 
     def to_dict(self):
         # Convert the class to dictionary
@@ -66,6 +68,9 @@ class Config:
                     value = int(value)
                 elif isinstance(current_value, float):
                     value = float(value)
+                elif isinstance(current_value, list) and value is not None:
+                    # Keep list as-is (YAML will load it as a list)
+                    pass
                 setattr(self, key, value)
 
     def load_from_yaml(self, file_path):

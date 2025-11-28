@@ -38,7 +38,7 @@ def compute_marker_to_world_from_multiple_cameras(cam2worlds, cam2markers):
 
 
 # Usage:
-extrs = np.load('/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi/calibration/extrinsics.npy')  # Shape: (N_cams, 4, 4)
+extrs = np.load('/oscar/data/gdk/hli230/projects/vitac-particle/2025-11-17/calibration_optim/extrinsics.npy')  # Shape: (N_cams, 4, 4)
 cameras = [subdir for subdir in os.listdir('/users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco') if "cam" in subdir]
 
 marker2cam_rots  = np.load('/users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco/aruco_results/all_rvecs.npy', allow_pickle=True).item()
@@ -60,11 +60,11 @@ assert cam2worlds.shape[0] == len(valid_cameras), "cam2worlds and valid_cameras 
 marker2cams = []
 cam2markers = []
 for key in marker2cam_rots.keys():
-    rot = marker2cam_rots[key]
-    trans = marker2cam_trans[key]
+    rot = marker2cam_rots[key].reshape(3, 1)
+    trans = marker2cam_trans[key].reshape(3, )
     marker2cam = np.eye(4)
     marker2cam[:3, :3] = cv2.Rodrigues(rot)[0]
-    marker2cam[:3, 3] = trans[:, 0]
+    marker2cam[:3, 3] = trans
     try:
         cam2marker = np.linalg.inv(marker2cam)
     except np.linalg.LinAlgError:
@@ -84,6 +84,10 @@ assert cam2markers.shape[0] == len(valid_cameras), "cam2markers and valid_camera
 avg_marker2world, all_marker2worlds = compute_marker_to_world_from_multiple_cameras(
     cam2worlds, cam2markers
 )
+if avg_marker2world[2,3] > 1.0:  # if > 1m above world origin
+    avg_marker2world[:3,2] *= -1 
+print("Marker position in world:", avg_marker2world[:3,3])
+print("Marker up vector (Z):", avg_marker2world[:3,2])
 print(f"avg_marker2world: {avg_marker2world}")
 print(f"all_marker2worlds: {all_marker2worlds.shape}")
 assert all_marker2worlds.shape[0] == len(valid_cameras), "all_marker2worlds and valid_cameras have different lengths"

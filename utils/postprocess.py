@@ -108,7 +108,7 @@ intrs = np.array(intrs)
 # c2ws = np.array(c2ws)
 # intrs = np.load(f"{camera_dir}/intrinsics.npy")
 print(f"intrs: {intrs.shape}")
-img_shape = cv2.imread(os.path.join(colors_dir, cameras[0], "undistorted_raw", "000000.png")).shape
+img_shape = cv2.imread(os.path.join(colors_dir, cameras[0], "undistorted", "000000.png")).shape
 print(f"img_shape type: {img_shape}")
 
 metadata = {

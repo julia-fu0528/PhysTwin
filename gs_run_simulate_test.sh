@@ -15,22 +15,15 @@ views=("0")
 #         "single_push_sloth"
 #         "weird_package")
 
-scenes=("008-pink-cloth")
-
+scene_name="008-pink-cloth"
 exp_name='init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0'
 
-for scene_name in "${scenes[@]}"; do
-
-    python gs_render_dynamics.py \
-        -s ${root}/${scene_name}/episode_0000  \
-        -m ${output_dir}/${exp_name} \
-        --name ${scene_name} \
-
-    for view_name in "${views[@]}"; do
-        # Convert images to video
-        python gaussian_splatting/img2video.py \
-            --image_folder ${output_dir}/${view_name} \
-            --video_path ${output_dir}/${view_name}.mp4
-    done
-
-done
+python gs_render_dynamics.py \
+    -s ${root}/${scene_name}/episode_0000  \
+    -m ${root}/${scene_name}/episode_0000 \
+    --iteration 30000 \
+    --name ${scene_name} \
+    --start_frame 56 \
+    --end_frame 261 \
+    --num_frames 261 \
+    # --render_all_frames

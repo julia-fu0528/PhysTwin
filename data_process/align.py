@@ -271,7 +271,7 @@ if __name__ == "__main__":
 
     cameras = data["cameras"]
     cam_idx = 0
-    img_path = f"{base_path}/{case_name}/{cameras[cam_idx]}/undistorted_raw/000000.png"
+    img_path = f"{base_path}/{case_name}/{cameras[cam_idx]}/undistorted/000000.png"
     mesh_path = f"{base_path}/{case_name}/shape/object.glb"
     # Get the mask index of the object
     with open(f"{base_path}/{case_name}/mask/mask_info_{cam_idx}.json", "r") as f:

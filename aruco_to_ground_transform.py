@@ -6,6 +6,7 @@ Simple script to convert ArUco results to PhysTwin ground transform
 import numpy as np
 import cv2
 import os
+import argparse
 
 def aruco_to_ground_transform(aruco_output_dir, reference_camera='cam0'):
     """
@@ -82,14 +83,19 @@ def aruco_to_ground_transform(aruco_output_dir, reference_camera='cam0'):
 def main():
     """Example usage"""
     
-    # Adjust these paths to match your setup
-    aruco_output_dir = "aruco_output"  # Output directory from your ArUco script
-    reference_camera = "cam0"  # Which camera to use as reference
+    parser = argparse.ArgumentParser(description='Convert ArUco results to PhysTwin ground transform')
+    parser.add_argument('--aruco-output-dir', type=str, 
+                       default="/users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco/aruco_results",
+                       help='Output directory from your ArUco script')
+    parser.add_argument('--reference-camera', type=str, 
+                       default="brics-odroid-001_cam0",
+                       help='Which camera to use as reference')
+    args = parser.parse_args()
     
     print("=== Converting ArUco Results to PhysTwin Ground Transform ===")
     
     ground_transform, R_world_avg, t_world_avg = aruco_to_ground_transform(
-        aruco_output_dir, reference_camera
+        args.aruco_output_dir, args.reference_camera
     )
     
     if ground_transform is not None:

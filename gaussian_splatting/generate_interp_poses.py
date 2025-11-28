@@ -2,6 +2,7 @@ import numpy as np
 import scipy.interpolate
 import pickle
 import os
+from argparse import ArgumentParser
 
 
 def normalize(v):
@@ -70,25 +71,89 @@ def generate_interpolated_path(poses: np.ndarray,
 
 
 if __name__ == '__main__':
-    root_dir = "./data/gaussian_data"
-    for scene_name in sorted(os.listdir(root_dir)):
-        scene_dir = os.path.join(root_dir, scene_name)
-        print(f'Processing {scene_name}')
-        camera_path = os.path.join(scene_dir, 'camera_meta.pkl')
-        with open(camera_path, 'rb') as f:
-            camera_meta = pickle.load(f)
-        c2ws = camera_meta['c2ws']
-        pose_0 = c2ws[0]
-        pose_1 = c2ws[1]
-        pose_2 = c2ws[2]
-        n_interp = 50
-        poses_01 = np.stack([pose_0, pose_1], 0)[:, :3, :]
-        interp_poses_01 = generate_interpolated_path(poses_01, n_interp)
-        poses_12 = np.stack([pose_1, pose_2], 0)[:, :3, :]
-        interp_poses_12 = generate_interpolated_path(poses_12, n_interp)
-        poses_20 = np.stack([pose_2, pose_0], 0)[:, :3, :]
-        interp_poses_20 = generate_interpolated_path(poses_20, n_interp)
-        interp_poses = np.concatenate([interp_poses_01, interp_poses_12, interp_poses_20], 0)
-        output_poses = [np.vstack([pose, np.array([0, 0, 0, 1])]) for pose in interp_poses]
-        pickle.dump(output_poses, open(os.path.join(scene_dir, 'interp_poses.pkl'), 'wb'))
+    parser = ArgumentParser()
+    parser.add_argument("--base_path", type=str, required=True, help="Base path to data directory")
+    parser.add_argument("--case_name", type=str, required=True, help="Case/scene name")
+    parser.add_argument("--n_interp", type=int, default=50, help="Number of interpolated poses between keyframes")
+    parser.add_argument("--use_all_cameras", action="store_true", help="Use all cameras instead of just first 3")
+    parser.add_argument("--close_loop", action="store_true", help="Close the loop by returning to first camera")
+    args = parser.parse_args()
+    
+    base_path = args.base_path
+    case_name = args.case_name
+    n_interp = args.n_interp
+    
+    scene_dir = os.path.join(base_path, case_name)
+    print(f'Processing {case_name}')
+    
+    # Load camera data using same approach as train_warp.py
+    camera_path = os.path.join(scene_dir, 'episode_0000', 'calibrate.pkl')
+    assert os.path.exists(camera_path), f"Camera file not found: {camera_path}"
+    with open(camera_path, 'rb') as f:
+        c2ws = pickle.load(f)
+    
+    # # Apply T_world2marker transformation (same as train_warp.py)
+    # # Try to load from ArUco calibration, fallback to hardcoded value
+    # aruco_results_path = '/users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco/aruco_results/avg_marker2world.npy'
+    # if os.path.exists(aruco_results_path):
+    #     T_marker2world = np.load(aruco_results_path)
+    #     print(f"Loaded T_marker2world from ArUco calibration: {aruco_results_path}")
+    # else:
+    #     # Fallback to hardcoded value
+    T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
+                                [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
+                                [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+                                [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+    print("Using hardcoded T_marker2world (ArUco calibration file not found)")
+    T_world2marker = np.linalg.inv(T_marker2world)
+    c2ws = [T_world2marker @ c2w for c2w in c2ws]
+    
+    print(f"Found {len(c2ws)} camera poses")
+    
+    # Select keyframe poses
+    if args.use_all_cameras:
+        # Use all cameras
+        keyframe_poses = c2ws
+        if len(keyframe_poses) < 2:
+            raise ValueError(f"Need at least 2 camera poses, but found {len(keyframe_poses)}")
+        print(f"Using all {len(keyframe_poses)} cameras for interpolation")
+    else:
+        # Use first 3 cameras (original behavior)
+        if len(c2ws) < 3:
+            raise ValueError(f"Need at least 3 camera poses, but found {len(c2ws)}")
+        keyframe_poses = c2ws[:3]
+        print(f"Using first 3 cameras for interpolation")
+    
+    # Generate interpolated paths between consecutive keyframes
+    interp_poses_list = []
+    num_segments = len(keyframe_poses) - 1
+    
+    for i in range(num_segments):
+        pose_start = keyframe_poses[i]
+        pose_end = keyframe_poses[i + 1]
+        poses_segment = np.stack([pose_start, pose_end], 0)[:, :3, :]
+        interp_poses_segment = generate_interpolated_path(poses_segment, n_interp)
+        interp_poses_list.append(interp_poses_segment)
+        print(f"  Segment {i+1}/{num_segments}: {len(interp_poses_segment)} interpolated poses")
+    
+    # Optionally close the loop by returning to first camera
+    if args.close_loop:
+        pose_start = keyframe_poses[-1]
+        pose_end = keyframe_poses[0]
+        poses_segment = np.stack([pose_start, pose_end], 0)[:, :3, :]
+        interp_poses_segment = generate_interpolated_path(poses_segment, n_interp)
+        interp_poses_list.append(interp_poses_segment)
+        print(f"  Closing loop: {len(interp_poses_segment)} interpolated poses")
+    
+    # Concatenate all interpolated poses
+    interp_poses = np.concatenate(interp_poses_list, 0)
+    
+    # Convert to 4x4 matrices
+    output_poses = [np.vstack([pose, np.array([0, 0, 0, 1])]) for pose in interp_poses]
+    
+    # Save interpolated poses
+    output_path = os.path.join(scene_dir, 'interp_poses.pkl')
+    pickle.dump(output_poses, open(output_path, 'wb'))
+    print(f'\nTotal: {len(output_poses)} interpolated poses generated')
+    print(f'Saved to {output_path}')
         

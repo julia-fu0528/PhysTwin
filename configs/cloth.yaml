@@ -23,7 +23,10 @@ vp_front: [1, 0, -2]
 vp_up: [0, 0, -1]
 vp_zoom: 1
 collision_dist: 0.02
-collision_learn: true
+collision_learn: false
 chamfer_weight: 1.0
 track_weight: 1.0
 self_collision: true
+# Grid visualization settings
+use_grid_gt: false  # Set to true to create grid video with all camera views
+vis_cam_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]  # List of camera indices for grid (e.g., [0, 5, 10, 15, 20, 25, 30, 35]). null = use all cameras
