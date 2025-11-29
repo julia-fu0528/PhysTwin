@@ -16,6 +16,7 @@ from ..scene.gaussian_model import GaussianModel
 from ..utils.sh_utils import eval_sh
 from torch.nn import functional as F
 from gsplat import rasterization
+import sys
 
 
 def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, use_gsplat=True, antialiased=False, separate_sh = False, use_trained_exp=False):

@@ -1,6 +1,11 @@
 python visualize_control_points.py \
     --base_path /oscar/data/gdk/hli230/projects/vitac-particle \
     --case_name 008-pink-cloth \
-    --transform_to_marker \
     --sphere_radius 0.01 \
-    --max_points 500
+    --max_points 500 \
+    --show_gaussians \
+    --model_path /oscar/data/gdk/hli230/projects/vitac-particle/008-pink-cloth/episode_0000 \
+    --source_path /oscar/data/gdk/hli230/projects/vitac-particle/008-pink-cloth/episode_0000 \
+    --iteration 30000 \
+    --max_gaussians 500 \
+    --transform_gaussians \

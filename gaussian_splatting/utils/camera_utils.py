@@ -103,10 +103,10 @@ def loadCam(args, id, cam_info, resolution_scale):
 
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
-                  image_path=cam_info.image_path, gt_alpha_mask=None,
+                  image_path=cam_info.image_path, mask_path=cam_info.mask_path,
                   image_name=cam_info.image_name, uid=id, data_device=args.data_device, 
                   time = cam_info.time, view_idx=cam_info.view_idx, K=cam_info.K,
-                  width=cam_info.width, height=cam_info.height
+                  width=cam_info.width, height=cam_info.height, time_idx=cam_info.time_idx
 )
     
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):

@@ -106,7 +106,7 @@ import cv2
         
 
 class Camera(nn.Module):
-    def __init__(self, colmap_id, R, T, FoVx, FoVy, image_path, gt_alpha_mask,
+    def __init__(self, colmap_id, R, T, FoVx, FoVy, image_path, 
                  image_name, uid, K,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", time = 0,
                     mask_path = None, depth=None, width=None, height=None, time_idx=None, view_idx=None
@@ -144,6 +144,7 @@ class Camera(nn.Module):
                                                 #   , device=self.data_device)
         self.depth = depth
         self.mask_path = mask_path
+        self.time_idx = time_idx
         self.K = K
         self.zfar = 100.0
         self.znear = 0.01

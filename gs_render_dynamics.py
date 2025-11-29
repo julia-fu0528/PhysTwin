@@ -21,6 +21,8 @@ from argparse import ArgumentParser
 from gaussian_splatting.arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_splatting.gaussian_renderer import GaussianModel
 import sys
+from PIL import Image
+import torch.nn.functional as F
 try:
     from diff_gaussian_rasterization import SparseGaussianAdam
 
@@ -45,6 +47,7 @@ from gaussian_splatting.dynamic_utils import (
     mat2quat,
 )
 import pickle
+import imageio
 
 
 def render_set(
@@ -57,24 +60,28 @@ def render_set(
     train_test_exp,
     separate_sh,
     disable_sh=False,
+    start_frame=0,
 ):
+    
     print(f"views shape: {len(views)}")
     render_path = os.path.join(output_path, name)
     makedirs(render_path, exist_ok=True)
 
-    # view_indices = [0, 25, 50, 75, 100, 125]
-    view_indices = [0, 1, 23]
+    # Render all views
+    view_indices = list(range(len(views)))
     selected_views = [views[i] for i in view_indices]
 
     for idx, view in enumerate(tqdm(selected_views, desc="Rendering progress")):
-
-        # view_idx = view_indices[idx]
-        # view_render_path = os.path.join(render_path, '{0:05d}'.format(view_idx))
+        print(f"Processing view {idx}")
+        # Directory per view (used for optional debugging outputs)
         view_render_path = os.path.join(render_path, f"{idx}")
         makedirs(view_render_path, exist_ok=True)
 
-        for frame_idx, gaussians in enumerate(gaussians_list):
+        # Collect frames for this view to create a video
+        video_frames = []
 
+        for frame_idx, gaussians in enumerate(gaussians_list):
+            scaling_modifier = 1.0
             if disable_sh:
                 override_color = gaussians.get_features_dc.squeeze()
                 results = render(
@@ -82,6 +89,7 @@ def render_set(
                     gaussians,
                     pipeline,
                     background,
+                    scaling_modifier=scaling_modifier,
                     override_color=override_color,
                     # use_trained_exp=train_test_exp,
                     use_trained_exp=False,
@@ -93,17 +101,87 @@ def render_set(
                     gaussians,
                     pipeline,
                     background,
+                    scaling_modifier=scaling_modifier,
                     # use_trained_exp=train_test_exp,
                     use_trained_exp=False,
                     separate_sh=separate_sh,
                 )
 
-            rendering = results["render"]
+            # RGB(A) rendering
+            rendering = results["render"]  # (3 or 4, H, W) in range [0, 1]
 
-            torchvision.utils.save_image(
-                rendering,
-                os.path.join(view_render_path, "{0:05d}".format(frame_idx) + ".png"),
+            # Load original image from camera if available
+            if hasattr(view, 'image_path') and view.image_path is not None and os.path.exists(view.image_path):
+                image_path = view.image_path.replace("000000", f"{frame_idx + start_frame:06d}")
+                try:
+                    # Load original image as RGB
+                    gt_image = Image.open(image_path).convert("RGB")
+                    gt_image = gt_image.resize((view.image_width, view.image_height))
+                    gt_image = torch.from_numpy(np.array(gt_image)).float() / 255.0  # [0, 1]
+                    gt_image = gt_image.permute(2, 0, 1)  # (3, H, W)
+                    gt_image = gt_image.to(rendering.device)
+                except Exception as e:
+                    print(f"Warning: Could not load image from {image_path}: {e}")
+                    # Fallback: use background color
+                    bg_color = background if isinstance(background, torch.Tensor) else torch.tensor(background, device=rendering.device)
+                    gt_image = bg_color.unsqueeze(1).unsqueeze(2).expand(3, rendering.shape[1], rendering.shape[2])  # (3, H, W)
+            else:
+                # Fallback: use background color
+                bg_color = background if isinstance(background, torch.Tensor) else torch.tensor(background, device=rendering.device)
+                gt_image = bg_color.unsqueeze(1).unsqueeze(2).expand(3, rendering.shape[1], rendering.shape[2])  # (3, H, W)
+            
+            # Resize gt_image to match rendering resolution if needed
+            if gt_image.shape[1] != rendering.shape[1] or gt_image.shape[2] != rendering.shape[2]:
+                gt_image = F.interpolate(
+                    gt_image.unsqueeze(0),
+                    size=(rendering.shape[1], rendering.shape[2]),
+                    mode='bilinear',
+                    align_corners=False
+                ).squeeze(0)
+            
+            # Alpha blending: foreground (GS) at 0.6 alpha, background (original) at 0.4 alpha
+            # Formula: composite = foreground * alpha + background * (1 - alpha)
+            # rendered_image is (3, H, W), gt_image is (3, H, W)
+            alpha_gs = 0.6  # Alpha for GS rendering
+            alpha_bg = 0.4  # Alpha for background (original image)
+            
+            # Create alpha channel: 0.6 where GS is visible, 0.4 elsewhere
+            # Check if GS is visible (non-zero pixels)
+            gs_visible = (rendering.sum(dim=0) > 0.01).float()  # (H, W) - 1 where GS visible, 0 elsewhere
+            alpha_channel = alpha_gs * gs_visible + alpha_bg * (1 - gs_visible)  # (H, W)
+            alpha_channel = alpha_channel.unsqueeze(0)  # (1, H, W)
+            
+            # Proper alpha blending: composite = foreground * alpha + background * (1 - alpha)
+            # But we want GS at 0.6 and background at 0.4, so:
+            # composite = rendering * 0.6 + gt_image * 0.4
+            # give rendering an alpha channel of 0.6
+            rendering_alpha = torch.ones_like(rendering[0, :, :]) 
+            rendering = torch.cat([rendering[0:3, :, :], rendering_alpha.unsqueeze(0)], dim=0)
+            # give gt_image an alpha channel of 0.4
+            gt_image_alpha = torch.ones_like(gt_image[0, :, :])
+            gt_image = torch.cat([gt_image[0:3, :, :], gt_image_alpha.unsqueeze(0)], dim=0)
+            composite_rgb = rendering * alpha_gs + gt_image * alpha_bg  # (3, H, W)
+            # Combine RGB with alpha channel to create RGBA
+            composite_rgba = torch.cat([composite_rgb, alpha_channel], dim=0)  # (4, H, W)
+
+            # Convert composite RGB to uint8 frame and store for video
+            frame_np = (
+                composite_rgb.clamp(0, 1)
+                .detach()
+                .cpu()
+                .permute(1, 2, 0)  # (H, W, 3)
+                .numpy()
             )
+            frame_np = (frame_np * 255).astype("uint8")
+            video_frames.append(frame_np)
+
+        # After all frames for this view, write out a video
+        if len(video_frames) > 0:
+            video_path = os.path.join(view_render_path, "video.mp4")
+            imageio.mimwrite(video_path, video_frames, fps=30)
+            print(f"Saved video to {video_path}")
+        else:
+            print(f"No frames to save for view {idx}")
 
 
 def render_sets(
@@ -124,10 +202,12 @@ def render_sets(
     print(f"output_dir: {output_dir}")
     with torch.no_grad():
         output_path = output_dir
+        print(f"dataset.white_background: {dataset.white_background}")
 
         bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
+        print(f"bg_color: {bg_color}")
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-
+        print(f"dataset.sh_degree: {dataset.sh_degree}")
         gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, start_frame=start_frame, end_frame=end_frame, num_frames=num_frames)
 
@@ -148,9 +228,35 @@ def render_sets(
         with open(ctrl_pts_path, "rb") as f:
             ctrl_pts = pickle.load(f)  # (n_frames, n_ctrl_pts, 3) ndarray
         ctrl_pts = torch.tensor(ctrl_pts, dtype=torch.float32, device="cuda")
-        # print the delta between all consecutive ctrl_pts
-        # for i in range(1, len(ctrl_pts)):
-        #     print(f"delta between ctrl_pts {i} and {i-1}: {ctrl_pts[i] - ctrl_pts[i-1]}")
+        
+        # CRITICAL: Transform control points to match Gaussians coordinate system
+        # Control points are in world space, Gaussians are in marker space
+        # To transform control points from world to marker space, we need T_world2marker = inv(T_marker2world)
+        # Load T_marker2world from ArUco calibration (same as in optimize_cma.py)
+        aruco_results_path = '/users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco/aruco_results/avg_marker2world.npy'
+        if os.path.exists(aruco_results_path):
+            T_marker2world = np.load(aruco_results_path)
+            T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
+                              [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
+                              [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+                              [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+            print(f"Loaded T_marker2world from ArUco calibration: {aruco_results_path}")
+        else:
+            # Fallback to hardcoded value if file doesn't exist
+            T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
+                              [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
+                              [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+                              [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+            print(f"Using hardcoded T_marker2world (ArUco calibration file not found)")
+        
+        # Transform control points from world space to marker space: ctrl_pts_marker = T_world2marker @ ctrl_pts_world
+        # where T_world2marker = inv(T_marker2world)
+        # T_world2marker = np.linalg.inv(T_marker2world)
+        T_marker2world = torch.tensor(T_marker2world, dtype=torch.float32, device="cuda")
+        ctrl_pts_homogeneous = torch.cat([ctrl_pts, torch.ones(ctrl_pts.shape[0], ctrl_pts.shape[1], 1, device="cuda")], dim=-1)  # (n_frames, n_ctrl_pts, 4)
+        ctrl_pts_transformed = torch.einsum('ij,npj->npi', T_marker2world, ctrl_pts_homogeneous)[:, :, :3]  # (n_frames, n_ctrl_pts, 3)
+        ctrl_pts = ctrl_pts_transformed
+        print(f"✓ Transformed control points from world to marker space using T_marker2world (inv of T_marker2world)")
 
         xyz_0 = gaussians.get_xyz
         print(f"xyz_0 shape: {xyz_0.shape}")
@@ -161,8 +267,10 @@ def render_sets(
         opa_0 = gaussians.get_opacity
         print(f"opa_0 shape: {opa_0.shape}")
         scale_0 = gaussians.get_scaling
-        print(f"scale_0 shape: {scale_0.shape}")
-        
+        print(f"scale_0 shape: {scale_0}")
+        print(f"unique scales: {torch.unique(scale_0)}")
+        print(f"gaussians._scaling shape: {gaussians._scaling.shape}")
+        print(f"unique scales: {torch.unique(gaussians._scaling)}")
 
         # print(gaussians.get_features_dc.shape)   # (N, 1, 3)
         # print(gaussians.get_features_rest.shape) # (N, 15, 3)
@@ -222,6 +330,8 @@ def render_sets(
                 "cuda"
             )
             gaussians_i._scaling = gaussians._scaling
+            print(f"gaussians_i._scaling shape: {gaussians_i._scaling.shape}")
+            print(f"unique scales: {torch.unique(gaussians_i._scaling)}")
             gaussians_list.append(gaussians_i)
 
         # Option to render both training and test cameras, or just test cameras
@@ -252,6 +362,7 @@ def render_sets(
             separate_sh,
             # disable_sh=dataset.disable_sh,
             disable_sh=False,
+            start_frame=args.start_frame,
         )
 
 
@@ -273,16 +384,13 @@ def rollout(xyz_0, rgb_0, quat_0, opa_0, ctrl_pts, n_steps, device="cuda"):
 
         prev_particle_pos = ctrl_pts[i - 1]
         cur_particle_pos = ctrl_pts[i]
-        print(f"prev_particle_pos: {prev_particle_pos}")
-        print(f"cur_particle_pos: {cur_particle_pos}")
-        print(f"delta between prev_particle_pos and cur_particle_pos: {cur_particle_pos - prev_particle_pos}")
 
         # relations = get_topk_indices(prev_particle_pos, K=16)
 
         # interpolate all_pos and particle_pos
         chunk_size = 20_000
+        # chunk_size = 100
         num_chunks = (len(all_pos) + chunk_size - 1) // chunk_size
-        print(f"num_chunks: {num_chunks}")
         for j in range(num_chunks):
             start = j * chunk_size
             end = min((j + 1) * chunk_size, len(all_pos))

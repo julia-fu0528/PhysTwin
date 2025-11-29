@@ -1,6 +1,6 @@
 root="/oscar/data/gdk/hli230/projects/vitac-particle"
-
-output_dir="${root}/gaussian_output_dynamic"
+scene_name="008-pink-cloth"
+output_dir="${root}/${scene_name}/gaussian_output_static/episode_0000"
 
 # views=("0" "1" "2")
 views=("0")
@@ -15,21 +15,11 @@ views=("0")
 #         "single_push_sloth"
 #         "weird_package")
 
-scene_name="008-pink-cloth"
 exp_name='init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0'
 
-python gs_render_dynamics.py \
-    -s ${root}/${scene_name}/episode_0000  \
+python gs_render_static.py \
+    -s ${root}/${scene_name}/episode_0000 \
     -m ${root}/${scene_name}/episode_0000 \
-    --iteration 30000 \
+    --output_dir ${output_dir} \
     --name ${scene_name} \
-    --start_frame 56 \
-    --end_frame 261 \
-    --num_frames 261 \
-    --white_background \
-    # --remove_gaussians
-    # --render_all_frames
-
-# python gaussian_splatting/img2video.py \
-#             --image_folder ${output_dir}/${scene_name}/3 \
-#             --video_path ${output_dir}/${scene_name}/3.mp4
+    --iteration 30000

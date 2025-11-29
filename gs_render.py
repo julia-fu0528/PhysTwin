@@ -31,6 +31,8 @@ from kornia import create_meshgrid
 import copy
 import pytorch3d
 import pytorch3d.ops as ops
+import zarr
+import sys
 
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, disable_sh=False):
@@ -170,7 +172,12 @@ def remove_gaussians_with_mask(gaussians, views):
             uv = uv[:, :2].round().long()   # Convert to integer pixel coordinates
 
             # Check if (u, v) coordinates are within the image bounds
-            alpha_mask = view.alpha_mask.squeeze(0)    # Assuming mask is a 2D tensor on CUDA with shape [H, W]
+            print(f"view.mask_path: {view.mask_path}")
+            mask = zarr.open(view.mask_path, mode="r")
+            mask = mask[view.time_idx, :, :]
+            alpha_mask = torch.from_numpy(mask).float() 
+            print(f"mask shape: {mask.shape}")
+            # alpha_mask = view.alpha_mask.squeeze(0)    # Assuming mask is a 2D tensor on CUDA with shape [H, W]
             valid_uv = (uv[:, 0] >= 0) & (uv[:, 0] < W) & (uv[:, 1] >= 0) & (uv[:, 1] < H)
 
             # Filter valid coordinates and check mask values
