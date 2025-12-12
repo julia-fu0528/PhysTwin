@@ -34,9 +34,10 @@ if __name__ == "__main__":
     case_name = args.case_name
 
     # if "cloth" in case_name or "package" in case_name:
-    # cfg.load_from_yaml("configs/cloth.yaml")
-    # else:
-        # cfg.load_from_yaml("configs/real.yaml")
+    if "cloth" in case_name or "package" in case_name:
+        cfg.load_from_yaml("configs/cloth.yaml")
+    else:
+        cfg.load_from_yaml("configs/real.yaml")
 
     logger.info(f"[DATA TYPE]: {cfg.data_type}")
 
@@ -51,9 +52,13 @@ if __name__ == "__main__":
     with open(optimal_path, "rb") as f:
         optimal_params = pickle.load(f)
     cfg.set_optimal_params(optimal_params)
-    T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
-                              [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
-                              [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+    # T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
+    #                           [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
+    #                           [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+    #                           [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+    T_marker2world = np.array([[ 9.92500579e-01, -1.22225711e-01,  1.86443478e-03,  1.36186366e-01],
+                              [ 5.43975403e-04, -1.08359291e-02, -9.99941142e-01, -1.88119571e-02],
+                              [ 1.22238720e-01,  9.92443176e-01, -1.06881781e-02,  7.19721945e-02],
                               [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
     # invert the ground transform
     T_world2marker = np.linalg.inv(T_marker2world)

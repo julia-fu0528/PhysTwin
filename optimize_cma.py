@@ -53,23 +53,23 @@ if __name__ == "__main__":
     #                           [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
     #                           [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
     #                           [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
-    # T_marker2world = np.array([[ -9.99395190e-01, 8.67378464e-03, 3.36752118e-02,  0.07659089],
-    #                           [ 2.32605437e-02, -5.53114078e-01, 8.32780742e-01,  -0.33260573],
-    #                           [ 2.58495945e-02, 8.33060371e-01, 5.52577792e-01,  -0.38696501],
-    #                           [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+    T_marker2world = np.array([[ 9.92500579e-01, -1.22225711e-01,  1.86443478e-03,  1.36186366e-01],
+                              [ 5.43975403e-04, -1.08359291e-02, -9.99941142e-01, -1.88119571e-02],
+                              [ 1.22238720e-01,  9.92443176e-01, -1.06881781e-02,  7.19721945e-02],
+                              [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
     # Load avg_marker2world from multi-camera ArUco calibration (read_aruco.py)
     # This is more accurate than single-camera calibration as it averages across all cameras
-    aruco_results_path = '/users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco/aruco_results/avg_marker2world.npy'
-    if os.path.exists(aruco_results_path):
-        T_marker2world = np.load(aruco_results_path)
-        print(f"Loaded T_marker2world from ArUco calibration: {aruco_results_path}")
-    else:
-        # Fallback to old hardcoded value if file doesn't exist
-        print(f"Warning: ArUco calibration file not found at {aruco_results_path}, using fallback value")
-        T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
-                                  [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
-                                  [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
-                                  [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+    # aruco_results_path = '/users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco/aruco_results/avg_marker2world.npy'
+    # if os.path.exists(aruco_results_path):
+    #     T_marker2world = np.load(aruco_results_path)
+    #     print(f"Loaded T_marker2world from ArUco calibration: {aruco_results_path}")
+    # else:
+    #     # Fallback to old hardcoded value if file doesn't exist
+    #     print(f"Warning: ArUco calibration file not found at {aruco_results_path}, using fallback value")
+    #     T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
+    #                               [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
+    #                               [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+    #                               [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
     # invert the ground transform
     T_world2marker = np.linalg.inv(T_marker2world)
     # T_world2marker = T_marker2world

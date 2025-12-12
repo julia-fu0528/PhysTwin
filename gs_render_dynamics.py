@@ -50,6 +50,37 @@ import pickle
 import imageio
 
 
+def create_grid_frame(images, grid_shape=None):
+    """
+    Create a grid image from a list of images (H, W, 3) uint8.
+    """
+    if not images:
+        return None
+
+    n = len(images)
+    if grid_shape is None:
+        cols = int(np.ceil(np.sqrt(n)))
+        rows = int(np.ceil(n / cols))
+    else:
+        rows, cols = grid_shape
+
+    h, w = images[0].shape[:2]
+    grid_h = rows * h
+    grid_w = cols * w
+    grid = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
+
+    for idx, img in enumerate(images):
+        r = idx // cols
+        c = idx % cols
+        if r < rows and c < cols:
+            # Handle RGBA images by taking only RGB channels
+            if img.shape[2] == 4:
+                img = img[:, :, :3]
+            grid[r * h:(r + 1) * h, c * w:(c + 1) * w] = img
+
+    return grid
+
+
 def render_set(
     output_path,
     name,
@@ -71,17 +102,20 @@ def render_set(
     view_indices = list(range(len(views)))
     selected_views = [views[i] for i in view_indices]
 
+    # store per-view frames for later grid video
+    all_view_frames = []
+
     for idx, view in enumerate(tqdm(selected_views, desc="Rendering progress")):
+        if idx != 23:
+            continue
         print(f"Processing view {idx}")
-        # Directory per view (used for optional debugging outputs)
-        view_render_path = os.path.join(render_path, f"{idx}")
-        makedirs(view_render_path, exist_ok=True)
+        # Path for this view's video
+        view_video_path = os.path.join(render_path, f"{idx}.mp4")
 
         # Collect frames for this view to create a video
         video_frames = []
 
         for frame_idx, gaussians in enumerate(gaussians_list):
-            scaling_modifier = 1.0
             if disable_sh:
                 override_color = gaussians.get_features_dc.squeeze()
                 results = render(
@@ -89,7 +123,6 @@ def render_set(
                     gaussians,
                     pipeline,
                     background,
-                    scaling_modifier=scaling_modifier,
                     override_color=override_color,
                     # use_trained_exp=train_test_exp,
                     use_trained_exp=False,
@@ -101,7 +134,6 @@ def render_set(
                     gaussians,
                     pipeline,
                     background,
-                    scaling_modifier=scaling_modifier,
                     # use_trained_exp=train_test_exp,
                     use_trained_exp=False,
                     separate_sh=separate_sh,
@@ -167,6 +199,7 @@ def render_set(
             # Convert composite RGB to uint8 frame and store for video
             frame_np = (
                 composite_rgb.clamp(0, 1)
+                # rendering.clamp(0, 1)
                 .detach()
                 .cpu()
                 .permute(1, 2, 0)  # (H, W, 3)
@@ -177,11 +210,26 @@ def render_set(
 
         # After all frames for this view, write out a video
         if len(video_frames) > 0:
-            video_path = os.path.join(view_render_path, "video.mp4")
-            imageio.mimwrite(video_path, video_frames, fps=30)
-            print(f"Saved video to {video_path}")
+            imageio.mimwrite(view_video_path, video_frames, fps=30)
+            print(f"Saved video to {view_video_path}")
+            all_view_frames.append(video_frames)
         else:
             print(f"No frames to save for view {idx}")
+
+    # After all individual view videos, create a grid video across views
+    if all_view_frames:
+        min_len = min(len(v) for v in all_view_frames if v)
+        if min_len > 0:
+            grid_frames = []
+            for frame_idx in range(min_len):
+                frame_imgs = [v[frame_idx] for v in all_view_frames]
+                grid_img = create_grid_frame(frame_imgs)
+                if grid_img is not None:
+                    grid_frames.append(grid_img)
+            if grid_frames:
+                grid_video_path = os.path.join(render_path, "grid_video.mp4")
+                imageio.mimwrite(grid_video_path, grid_frames, fps=30)
+                print(f"Saved grid video to {grid_video_path}")
 
 
 def render_sets(
@@ -234,21 +282,28 @@ def render_sets(
         # To transform control points from world to marker space, we need T_world2marker = inv(T_marker2world)
         # Load T_marker2world from ArUco calibration (same as in optimize_cma.py)
         aruco_results_path = '/users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco/aruco_results/avg_marker2world.npy'
-        if os.path.exists(aruco_results_path):
-            T_marker2world = np.load(aruco_results_path)
-            T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
-                              [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
-                              [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+        # if os.path.exists(aruco_results_path):
+        #     T_marker2world = np.load(aruco_results_path)
+            # T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
+            #                   [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
+            #                   [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+            #                   [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+            # print(f"Loaded T_marker2world from ArUco calibration: {aruco_results_path}")
+        # else:
+        #     # Fallback to hardcoded value if file doesn't exist
+        #     T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
+        #                       [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
+        #                       [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+        #                       [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+        #     print(f"Using hardcoded T_marker2world (ArUco calibration file not found)")
+        T_marker2world = np.array([[ 9.92500579e-01, -1.22225711e-01,  1.86443478e-03,  1.36186366e-01],
+                              [ 5.43975403e-04, -1.08359291e-02, -9.99941142e-01, -1.88119571e-02],
+                              [ 1.22238720e-01,  9.92443176e-01, -1.06881781e-02,  7.19721945e-02],
                               [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
-            print(f"Loaded T_marker2world from ArUco calibration: {aruco_results_path}")
-        else:
-            # Fallback to hardcoded value if file doesn't exist
-            T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
-                              [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
-                              [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
-                              [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
-            print(f"Using hardcoded T_marker2world (ArUco calibration file not found)")
-        
+        # T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
+        #                       [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
+        #                       [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+        #                       [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
         # Transform control points from world space to marker space: ctrl_pts_marker = T_world2marker @ ctrl_pts_world
         # where T_world2marker = inv(T_marker2world)
         # T_world2marker = np.linalg.inv(T_marker2world)

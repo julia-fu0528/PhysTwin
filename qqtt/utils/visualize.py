@@ -185,7 +185,7 @@ def visualize_pc(
             if cfg.overlay_path is not None:
                 frame_num = cfg.start_frame + i
                 mask = np.all(frame == [255, 255, 255], axis=-1)
-                image_path = f"{cfg.overlay_path}/{cameras[vis_cam_idx]}/undistorted/{frame_num:06d}.png"
+                image_path = f"{cfg.overlay_path}/{cameras[vis_cam_idx]}/undistorted_refined/{frame_num:06d}.png"
                 overlay = cv2.imread(image_path)
                 if overlay is not None:
                     overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)

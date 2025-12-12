@@ -904,7 +904,7 @@ def readBRICSCameras(params, images_folder, white_background, start_idx, end_idx
     cam_infos = []
     for idx, param in enumerate(params):
         print(f"reading camera {idx} of {len(params)}")
-        mask_path = os.path.join(images_folder, param["cam_name"], 'mask_optim.zarr')
+        mask_path = os.path.join(images_folder, param["cam_name"], 'mask_refined.zarr')
         if not os.path.exists(os.path.join(images_folder, param["cam_name"])):
             print(f"camera {param['cam_name']} not found")
             continue
@@ -944,7 +944,7 @@ def readBRICSCameras(params, images_folder, white_background, start_idx, end_idx
         dist = np.asarray([param["k1"], param["k2"], param["p1"], param["p2"]])
         
         for img_idx in range(start_idx, end_idx):
-            image_path = os.path.join(images_folder, param["cam_name"], 'undistorted',str(img_idx).zfill(6) + '.png')
+            image_path = os.path.join(images_folder, param["cam_name"], 'undistorted_refined',str(img_idx).zfill(6) + '.png')
             if os.path.exists(image_path):
                 image_name = os.path.basename(image_path).split(".")[0]
                 image = None
@@ -963,7 +963,7 @@ def readBRICSCameras(params, images_folder, white_background, start_idx, end_idx
 
 def readBricsSceneInfo(path, white_background, eval, extension=".png", start_frame=0, end_frame=20000, num_frames=20000):
     images_folder = path
-    filename = 'metric_params_undistorted.txt'
+    filename = 'metric_params_refined_undistorted.txt'
     params = read_params(os.path.join(images_folder, '..', filename))
     
     print(f"filename: {filename}")
