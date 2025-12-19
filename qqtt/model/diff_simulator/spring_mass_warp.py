@@ -305,7 +305,27 @@ def object_collision(
     else:
         v_new[tid] = v1
 
+# Calcualte the rest state pairs
+@wp.kernel(enable_backward=False)
+def build_resting_collision_pairs(
+    x: wp.array(dtype=wp.vec3),
+    collision_dist: float,
+    grid: wp.uint64,
+    resting_collision_pairs: wp.array2d(dtype=wp.bool),
+):
 
+    tid = wp.tid()
+
+    # order threads by cell
+    i = wp.hash_grid_point_id(grid, tid)
+
+    x1 = x[i]
+
+    neighbors = wp.hash_grid_query(grid, x1, collision_dist)
+    for index in neighbors:
+        if index < i:
+            resting_collision_pairs[i][index] = wp.bool(1)
+            resting_collision_pairs[index][i] = wp.bool(1)
 @wp.kernel
 def integrate_ground_collision(
     x: wp.array(dtype=wp.vec3),
@@ -850,6 +870,20 @@ class SpringMassSystemWarp:
         else:
             self.tape = wp.Tape()
 
+    def create_resting_case(self):
+        self.collision_grid.build(self.wp_states[0].wp_x, self.collision_dist * 5)
+        wp.launch(
+            build_resting_collision_pairs,
+            dim=self.num_object_points,
+            inputs=[
+                self.wp_states[0].wp_x,
+                self.collision_dist,
+                self.collision_grid.id,
+                ],
+            outputs=[self.resting_collision_pairs],            
+        )   
+
+
     def set_controller_target(self, frame_idx, pure_inference=False):
         if self.controller_points is not None:
             # Set the controller points
@@ -895,6 +929,7 @@ class SpringMassSystemWarp:
                 self.num_valid_motions = int(
                     self.gt_object_motions_valid[frame_idx - 1].sum()
                 )
+    
 
     def set_controller_interactive(
         self, last_controller_interactive, controller_interactive
@@ -946,7 +981,7 @@ class SpringMassSystemWarp:
                 inputs=[wp_v],
                 outputs=[self.wp_states[0].wp_v],
             )
-
+            
     def set_acc_count(self, acc_count):
         if acc_count:
             input = 1

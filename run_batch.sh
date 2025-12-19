@@ -12,7 +12,7 @@ mkdir -p brics_log/${session}
 optimize_jobids=()
 
 # Optimize episodes - adjust the range as needed
-for ((ep_idx=0; ep_idx< 1; ep_idx++)); do
+for ((ep_idx=3; ep_idx< 4; ep_idx++)); do
   d="episode_${ep_idx}"
   mkdir -p "brics_log/${session}/$d"
 
@@ -34,6 +34,11 @@ python script_optimize.py \
   --base_path "$DATA_DIR" \
   --ep_idx ${ep_idx} \
   --max_iter ${MAX_ITER}
+
+  
+python script_train.py \
+  --base_path "$DATA_DIR" \
+  --ep_idx ${ep_idx}
 EOT
 
   chmod +x "$job_script"
@@ -43,4 +48,4 @@ EOT
   sleep 0.2
 done
 
-echo "Submitted ${#optimize_jobids[@]} optimization jobs"
+echo "Submitted ${#optimize_jobids[@]} jobs"

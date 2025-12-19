@@ -35,6 +35,7 @@ if __name__ == "__main__":
     parser.add_argument("--train_frame", type=int, required=True)
     parser.add_argument("--max_iter", type=int, default=20)
     parser.add_argument("--start_iter", type=int, default=0, help="Iteration to start from (for resuming)")
+    parser.add_argument("--remove_cams", type=str, default=None)
     args = parser.parse_args()
 
     base_path = args.base_path
@@ -42,7 +43,10 @@ if __name__ == "__main__":
     train_frame = args.train_frame
     max_iter = args.max_iter
     start_iter = args.start_iter
-
+    remove_cams = args.remove_cams
+    if remove_cams is not None:
+        remove_cams = [c for c in remove_cams.split(',') if c]
+        print(f"remove cams: {remove_cams}")
     if "cloth" in case_name or "package" in case_name:
         cfg.load_from_yaml("configs/cloth.yaml")
     else:
@@ -99,5 +103,6 @@ if __name__ == "__main__":
         data_path=f"{base_path}/{case_name}/final_data.pkl",
         base_dir=base_dir,
         train_frame=train_frame,
+        remove_cams=remove_cams,
     )
     optimizer.optimize(max_iter=max_iter, start_iter=start_iter)

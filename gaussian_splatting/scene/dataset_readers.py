@@ -226,12 +226,25 @@ def readColmapCameras(
 
 def fetchPly(path):
     plydata = PlyData.read(path)
-    vertices = plydata["vertex"]
-    positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
-    colors = np.vstack([vertices["red"], vertices["green"], vertices["blue"]]).T / 255.0
-    normals = np.vstack([vertices["nx"], vertices["ny"], vertices["nz"]]).T
+    vertices = plydata['vertex']
+    print(f"vertices: {vertices}")
+    print(f"vertices['x']: {vertices['x']}")
+    print(f"vertices['y']: {vertices['y']}")
+    print(f"vertices['z']: {vertices['z']}")
+    print(f"vertices['red']: {vertices['red']}")
+    print(f"vertices['green']: {vertices['green']}")
+    print(f"vertices['blue']: {vertices['blue']}")
+    positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
+    print(f"positions: {positions}")
+    colors = np.vstack([vertices['red'], vertices['green'],
+                       vertices['blue']]).T / 255.0
+    print(f"colors: {colors}")
+    if 'nx' in vertices:
+        normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
+    else:
+        normals = np.zeros((positions.shape[0], 3))
+    print(f"normals: {normals}")
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
-
 
 def storePly(path, xyz, rgb, normals=None):
     # Define the dtype for the structured array
@@ -994,7 +1007,7 @@ def readBricsSceneInfo(path, white_background, eval, extension=".png", start_fra
     nerf_normalization = getNerfppNorm(train_cam_infos)
     # nerf_normalization = getNerfppNorm(test_cam_infos)
 
-    ply_path = os.path.join(path, "points3d.ply")
+    ply_path = os.path.join(path, "visual_hull_simple_full.ply")
     print(f"exists> {os.path.exists(ply_path)}")
     if not os.path.exists(ply_path):
         # Since this data set has no colmap data, we start with random points
@@ -1011,7 +1024,10 @@ def readBricsSceneInfo(path, white_background, eval, extension=".png", start_fra
         storePly(ply_path, xyz, SH2RGB(shs) * 255)
     try:
         pcd = fetchPly(ply_path)
-    except:
+    except Exception as e:
+        print(f"Error loading PLY file {ply_path}: {e}")
+        import traceback
+        traceback.print_exc()
         pcd = None
 
     scene_info = SceneInfo(point_cloud=pcd,

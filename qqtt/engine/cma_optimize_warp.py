@@ -21,12 +21,14 @@ class OptimizerCMA:
         mask_path=None,
         velocity_path=None,
         device="cuda:0",
+        remove_cams=None,
     ):
         cfg.data_path = data_path
         cfg.base_dir = base_dir
         cfg.device = device
         cfg.run_name = base_dir.split("/")[-1]
         cfg.train_frame = train_frame - cfg.start_frame
+        cfg.remove_cams = remove_cams
 
         if not os.path.exists(f"{cfg.base_dir}/optimizeCMA"):
             # Create directory if it doesn't exist
@@ -36,7 +38,7 @@ class OptimizerCMA:
         self.init_velocities = None
         # Load the data
         if cfg.data_type == "real":
-            self.dataset = RealData(visualize=False, use_grid=False, vis_cam_indices=None)
+            self.dataset = RealData(visualize=True, use_grid=False, vis_cam_indices=None)
             # Get the object points and controller points
             self.object_points = self.dataset.object_points
             self.object_colors = self.dataset.object_colors
@@ -48,7 +50,7 @@ class OptimizerCMA:
             self.num_surface_points = self.dataset.num_surface_points
             self.num_all_points = self.dataset.num_all_points
         elif cfg.data_type == "synthetic":
-            self.dataset = SimpleData(visualize=False)
+            self.dataset = SimpleData(visualize=True)
             self.object_points = self.dataset.data
             self.object_colors = None
             self.object_visibilities = None
@@ -255,11 +257,9 @@ class OptimizerCMA:
         
         # Initialize CMA-ES if not resuming
         if start_iter == 0:
-            print(f"before saving optimizeCMA/init.mp4")
             self.error_func(
                 x_init, visualize=True, video_path=f"{cfg.base_dir}/optimizeCMA/init.mp4"
             )
-            print(f"after saving optimizeCMA/init.mp4")
             
             std = 1 / 6
             es = cma.CMAEvolutionStrategy(x_init, std, {"bounds": [0.0, 1.0], "seed": 42})
@@ -279,11 +279,9 @@ class OptimizerCMA:
             
             # Save video for this iteration
             video_path = f"{cfg.base_dir}/optimizeCMA/iter_{iteration + 1:03d}.mp4"
-            print(f"before saving {video_path}")
             self.error_func(
                 current_best, visualize=True, video_path=video_path
             )
-            print(f"after saving {video_path}")
             
             # Log progress
             logger.info(f"Saved video: {video_path}")
@@ -314,13 +312,11 @@ class OptimizerCMA:
         final_drag_damping = self.denormalize(optimal_x[10], 0, 20)
         final_dashpot_damping = self.denormalize(optimal_x[11], 0, 200)
 
-        print(f"before saving optimizeCMA/optimal.mp4")
         self.error_func(
             optimal_x,
             visualize=True,
             video_path=f"{cfg.base_dir}/optimizeCMA/optimal.mp4",
         )
-        print(f"after saving optimizeCMA/optimal.mp4")
         
         optimal_results = {}
         optimal_results["global_spring_Y"] = final_global_spring_Y
@@ -340,7 +336,7 @@ class OptimizerCMA:
         with open(f"{cfg.base_dir}/optimal_params.pkl", "wb") as f:
             pickle.dump(optimal_results, f)
 
-    def error_func(self, parameters, visualize=False, video_path=None):
+    def error_func(self, parameters, visualize=True, video_path=None):
         global_spring_Y = self.denormalize(
             parameters[0], cfg.spring_Y_min, cfg.spring_Y_max
         )
@@ -411,6 +407,8 @@ class OptimizerCMA:
         self.simulator.set_init_state(
             self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
         )
+        if self.simulator.object_collision_flag:
+            self.simulator.create_resting_case()
 
         if visualize == True:
             vertices = [
@@ -428,8 +426,14 @@ class OptimizerCMA:
             # max_frame = self.dataset.frame_len
 
         # for j in range(1, max_frame):
-        print(f"max_frame: {max_frame}, cfg.start_frame: {cfg.start_frame}, end_frame: {cfg.end_frame}")
-        for j in range(1, max_frame):
+        # Ensure we don't go out of bounds - set_controller_target accesses controller_points[j] and controller_points[j-1]
+        # So we need j < len(controller_points) and j-1 >= 0, which means j can go from 1 to len(controller_points)-1
+        if self.controller_points is not None:
+            max_safe_frame = min(max_frame, self.controller_points.shape[0])
+        else:
+            max_safe_frame = max_frame
+
+        for j in range(1, max_safe_frame):
             self.simulator.set_controller_target(j)
             if self.simulator.object_collision_flag:
                 self.simulator.update_collision_graph()
@@ -487,7 +491,7 @@ class OptimizerCMA:
                 vertices[:, : self.num_all_points, :],
                 self.object_colors,
                 self.controller_points,
-                visualize=False,
+                visualize=visualize,
                 save_video=True,
                 save_path=video_path,
                 vis_cam_idx=23,

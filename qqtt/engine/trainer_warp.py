@@ -13,7 +13,19 @@ import warp as wp
 from scipy.spatial import KDTree
 import pickle
 import cv2
-from pynput import keyboard
+# pynput requires X server - import conditionally to allow headless operation
+# but enable visualization when display is available
+try:
+    from pynput import keyboard
+    PYNPUT_AVAILABLE = True
+except (ImportError, OSError) as e:
+    # pynput not available or X server not accessible
+    PYNPUT_AVAILABLE = False
+    keyboard = None
+    # Only warn if DISPLAY is set but pynput still fails
+    if os.environ.get('DISPLAY'):
+        import warnings
+        warnings.warn(f"pynput import failed despite DISPLAY being set: {e}")
 import pyrender
 import trimesh
 import matplotlib.pyplot as plt
@@ -55,18 +67,19 @@ class InvPhyTrainerWarp:
         velocity_path=None,
         pure_inference_mode=False,
         device="cuda:0",
+        remove_cams=None,
     ):
         cfg.data_path = data_path
         cfg.base_dir = base_dir
         cfg.device = device
         cfg.run_name = base_dir.split("/")[-1]
         cfg.train_frame = train_frame - cfg.start_frame if train_frame is not None else None
-
+        cfg.remove_cams = remove_cams
         self.init_masks = None
         self.init_velocities = None
         # Load the data
         if cfg.data_type == "real":
-            self.dataset = RealData(visualize=False, save_gt=False, use_grid=False, vis_cam_indices=cfg.vis_cam_indices)
+            self.dataset = RealData(visualize=True, save_gt=False, use_grid=False, vis_cam_indices=cfg.vis_cam_indices)
             # Get the object points and controller points
             self.object_points = self.dataset.object_points
             self.object_colors = self.dataset.object_colors
@@ -78,7 +91,7 @@ class InvPhyTrainerWarp:
             self.num_surface_points = self.dataset.num_surface_points
             self.num_all_points = self.dataset.num_all_points
         elif cfg.data_type == "synthetic":
-            self.dataset = SimpleData(visualize=False)
+            self.dataset = SimpleData(visualize=True)
             self.object_points = self.dataset.data
             self.object_colors = None
             self.object_visibilities = None
@@ -152,7 +165,13 @@ class InvPhyTrainerWarp:
             gt_object_motions_valid=self.object_motions_valid,
             self_collision=cfg.self_collision,
         )
-
+        
+        self.simulator.set_init_state(
+                self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
+            )
+        if self.simulator.object_collision_flag:
+            self.simulator.create_resting_case()
+            
         if not pure_inference_mode:
             self.optimizer = torch.optim.Adam(
                 [
@@ -401,16 +420,20 @@ class InvPhyTrainerWarp:
             if i % cfg.vis_interval == 0 or i == cfg.iterations - 1:
                 video_path = f"{cfg.base_dir}/train/sim_iter{i}.mp4"
                 self.visualize_sim(save_only=True, video_path=video_path, use_all_frames=False)
-                wandb.log(
-                    {
-                        "video": wandb.Video(
-                            video_path,
-                            format="mp4",
-                            fps=cfg.FPS,
-                        ),
-                    },
-                    step=i,
-                )
+                # Only log video to wandb if the file was actually created (may be skipped in headless mode)
+                if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+                    wandb.log(
+                        {
+                            "video": wandb.Video(
+                                video_path,
+                                format="mp4",
+                                fps=cfg.FPS,
+                            ),
+                        },
+                        step=i,
+                    )
+                else:
+                    logger.info(f"Video file not created (headless mode?), skipping wandb video log for iteration {i}")
                 # Save the parameters
                 cur_model = {
                     "epoch": i,
@@ -569,6 +592,7 @@ class InvPhyTrainerWarp:
                 self.object_colors,
                 self.controller_points,
                 visualize=True,
+                save_video=True,
                 vis_cam_idx=23,
             )
         else:
@@ -577,7 +601,7 @@ class InvPhyTrainerWarp:
                 vertices[:, : self.num_all_points, :],
                 self.object_colors,
                 self.controller_points,
-                visualize=False,
+                visualize=True,
                 save_video=True,
                 save_path=video_path,
                 vis_cam_idx=23,
@@ -1153,8 +1177,17 @@ class InvPhyTrainerWarp:
             self.virtual_keys = {}     # Dictionary to track virtual keys with timestamps
             self.virtual_key_duration = 0.03  # Virtual key press duration in seconds
         
-        listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
-        listener.start()
+        # Only start keyboard listener if pynput is available (requires X server)
+        listener = None
+        if PYNPUT_AVAILABLE and keyboard is not None:
+            try:
+                listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
+                listener.start()
+            except Exception as e:
+                print(f"Warning: Could not start keyboard listener (X server may not be available): {e}")
+                listener = None
+        else:
+            print("Info: Keyboard listener disabled (no X server/display available)")
         self.target_change = np.zeros((n_ctrl_parts, 3))
 
         ############## Temporary timer ##############
@@ -1219,7 +1252,8 @@ class InvPhyTrainerWarp:
         frame_count = 0
 
         ############## End Temporary timer ##############
-
+        if self.simulator.object_collision_flag:
+            self.simulator.create_resting_case()
         while True:
 
             total_timer.start()
@@ -1453,7 +1487,8 @@ class InvPhyTrainerWarp:
                         f"{key.capitalize()}: {avg_time*1000:.2f} ms ({percentage:.1f}%)"
                     )
 
-        listener.stop()
+        if listener is not None:
+            listener.stop()
 
 
     def _transform_gs(self, gaussians, M, majority_scale=1):
@@ -1631,7 +1666,7 @@ class InvPhyTrainerWarp:
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (cfg.WH[0], cfg.WH[1]))
 
-        frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted/{cfg.start_frame:06d}.png"
+        frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_refined/{cfg.start_frame:06d}.png"
         frame = cv2.imread(frame_path)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -1755,7 +1790,7 @@ class InvPhyTrainerWarp:
 
             prev_x = x.clone()
 
-            frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted/{i:06d}.png"
+            frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_refined/{i:06d}.png"
             frame = cv2.imread(frame_path)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -1923,7 +1958,7 @@ class InvPhyTrainerWarp:
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (cfg.WH[0], cfg.WH[1]))
 
-        frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted/{cfg.start_frame:06d}.png"
+        frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_refined/{cfg.start_frame:06d}.png"
         frame = cv2.imread(frame_path)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -2086,7 +2121,7 @@ class InvPhyTrainerWarp:
 
             prev_x = x.clone()
 
-            frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted/{i:06d}.png"
+            frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_refined/{i:06d}.png"
             frame = cv2.imread(frame_path)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 

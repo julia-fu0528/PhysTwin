@@ -7,7 +7,7 @@ import sys
 
 
 class RealData:
-    def __init__(self, visualize=False, save_gt=True, use_grid=None, vis_cam_indices=None):
+    def __init__(self, visualize=True, save_gt=True, use_grid=None, vis_cam_indices=None):
         logger.info(f"[DATA]: loading data from {cfg.data_path}")
         self.data_path = cfg.data_path
         self.base_dir = cfg.base_dir
@@ -114,7 +114,7 @@ class RealData:
         # Visualize/save the GT frames
         self.visualize_data(visualize=visualize, save_gt=save_gt, use_grid=self.use_grid, vis_cam_indices=self.vis_cam_indices)
 
-    def visualize_data(self, visualize=False, save_gt=True, use_grid=False, vis_cam_indices=None):
+    def visualize_data(self, visualize=True, save_gt=True, use_grid=False, vis_cam_indices=None):
         if visualize:
             if use_grid:
                 visualize_pc_grid(
@@ -123,7 +123,7 @@ class RealData:
                     self.controller_points,
                     self.object_visibilities,
                     self.object_motions_valid,
-                    save_video=False,
+                    save_video=True,
                     vis_cam_indices=vis_cam_indices,
                 )
             else:

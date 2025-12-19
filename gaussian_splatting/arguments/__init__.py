@@ -93,9 +93,9 @@ class OptimizationParams(ParamGroup):
         self.exposure_lr_delay_steps = 0
         self.exposure_lr_delay_mult = 0.0
         self.percent_dense = 0.01
-        self.lambda_dssim = 0.2
+        self.lambda_dssim = 0
         self.densification_interval = 100
-        self.opacity_reset_interval = 3000
+        self.opacity_reset_interval = 3000000
         self.densify_from_iter = 500
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
@@ -104,7 +104,7 @@ class OptimizationParams(ParamGroup):
         self.lambda_depth = 0.0        # 1e-1
         self.lambda_normal = 0.0       # 1e-3
         self.lambda_anisotropic = 0.0  # 1e-1
-        self.lambda_seg = 0.0          # 1e-1
+        self.lambda_seg = 0.1          # 1e-1
         self.random_background = False
         self.optimizer_type = "default"
         super().__init__(parser, "Optimization Parameters")

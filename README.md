@@ -165,9 +165,14 @@ Use the processed data to train the PhysTwin. Instructions on how to get above `
 ```
 # Zero-order Optimization
 python script_optimize.py
+# julia's version (basically same as original, just rewrote this for run_batch.sh on ccv without visualization):
+python script_optimize.py --base_path /oscar/data/gdk/hli230/projects/vitac-particle/008-pink-cloth --ep_idx 0 
 
 # First-order Optimization
 python script_train.py
+# julia's version:
+python script_train.py --base_path /oscar/data/gdk/hli230/projects/vitac-particle/008-pink-cloth --ep_idx 0 
+
 
 # Inference with the constructed models
 python script_inference.py

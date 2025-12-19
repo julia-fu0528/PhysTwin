@@ -1,3 +1,5 @@
+brics_log/
+
 test.py
 wandb/
 experiments/

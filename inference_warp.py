@@ -28,11 +28,15 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--base_path", type=str, required=True)
     parser.add_argument("--case_name", type=str, required=True)
+    parser.add_argument("--remove_cams", type=str, default=None)
     args = parser.parse_args()
 
     base_path = args.base_path
     case_name = args.case_name
-
+    remove_cams = args.remove_cams
+    if remove_cams is not None:
+        remove_cams = [c for c in remove_cams.split(',') if c]
+        print(f"remove cams: {remove_cams}")
     # if "cloth" in case_name or "package" in case_name:
     if "cloth" in case_name or "package" in case_name:
         cfg.load_from_yaml("configs/cloth.yaml")
@@ -84,6 +88,7 @@ if __name__ == "__main__":
         data_path=f"{base_path}/{case_name}/final_data.pkl",
         base_dir=base_dir,
         pure_inference_mode=True,
+        remove_cams=remove_cams,
     )
     assert len(glob.glob(f"{base_dir}/train/best_*.pth")) > 0
     best_model_path = glob.glob(f"{base_dir}/train/best_*.pth")[0]
