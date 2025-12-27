@@ -5,7 +5,7 @@ username="${DOCKER_USERNAME:-$(whoami)}"
 
 # CUDA architecture settings
 # You can find the list of CUDA architectures here: https://developer.nvidia.com/cuda-gpus
-arch="${1:-8.6+PTX}"
+arch="${1:-12.0+PTX}"
 
 # Construct image name
 image_name="$username/phystwin:1.0"

@@ -2,10 +2,7 @@
 
 # Load arguments
 username="${DOCKER_USERNAME:-$(whoami)}"
-data_dir=$1
-experiments_dir=$2
-experiments_optimization_dir=$3
-gaussian_output_dir=$4
+code_dir=$1
 
 # Check if the Docker image is available
 if ! docker image inspect $username/phystwin:1.0 > /dev/null 2>&1; then
@@ -29,8 +26,5 @@ xhost +local:root
 
 docker run --gpus 'all,"capabilities=compute,utility,graphics"' \
     -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY \
-    -v $data_dir:/PhysTwin/data \
-    -v $experiments_dir:/PhysTwin/experiments \
-    -v $experiments_optimization_dir:/PhysTwin/experiments_optimization \
-    -v $gaussian_output_dir:/PhysTwin/gaussian_output \
+    -v $code_dir:/PhysTwin -v /mnt/data/ParticleData:/ParticleData \
     --privileged --entrypoint /bin/bash -it $username/phystwin:1.0

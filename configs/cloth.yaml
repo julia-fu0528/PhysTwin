@@ -23,7 +23,7 @@ vp_front: [1, 0, -2]
 vp_up: [0, 0, -1]
 vp_zoom: 1
 collision_dist: 0.02
-collision_learn: false
+collision_learn: true
 chamfer_weight: 1.0
 track_weight: 1.0
 self_collision: true

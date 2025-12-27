@@ -13,7 +13,7 @@ brics-odroid-019_cam0,\
 "
 
 def optimize_episode(base_path, ep_idx, max_iter=20, remove_cams=None):
-    case_name = f"episode_{ep_idx:04d}"
+    case_name = f"episode_{ep_idx}"
     case_path = f"{base_path}/{case_name}"
     
     if not os.path.exists(case_path):
