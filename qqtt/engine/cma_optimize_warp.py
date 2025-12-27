@@ -410,6 +410,9 @@ class OptimizerCMA:
         if self.simulator.object_collision_flag:
             self.simulator.create_resting_case()
 
+        if self.simulator.object_collision_flag:
+            self.simulator.create_resting_case()
+
         if visualize == True:
             vertices = [
                 wp.to_torch(self.simulator.wp_states[0].wp_x, requires_grad=False).cpu()
@@ -496,8 +499,5 @@ class OptimizerCMA:
                 save_path=video_path,
                 vis_cam_idx=23,
             )
-            print(f"Real data shape: {self.dataset.object_points.shape}")
-            print(f"Simulation data shape: {vertices.shape}")
-            print(f"Real data range: {self.dataset.object_points.min()} to {self.dataset.object_points.max()}")
-            print(f"Simulation range: {vertices.min()} to {vertices.max()}")
+
         return total_loss
