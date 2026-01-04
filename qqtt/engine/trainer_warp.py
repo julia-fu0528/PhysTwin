@@ -13,6 +13,7 @@ import warp as wp
 from scipy.spatial import KDTree
 import pickle
 import cv2
+import decord
 # pynput requires X server - import conditionally to allow headless operation
 # but enable visualization when display is available
 try:
@@ -29,10 +30,7 @@ except (ImportError, OSError) as e:
 import pyrender
 import trimesh
 import matplotlib.pyplot as plt
-import torch.nn.functional as F
-from torchvision.transforms import Resize
 from scipy.spatial.transform import Rotation as R
-import sys
 from gaussian_splatting.scene.gaussian_model import GaussianModel
 from gaussian_splatting.scene.cameras import Camera
 from gaussian_splatting.gaussian_renderer import render as render_gaussian
@@ -187,13 +185,13 @@ class InvPhyTrainerWarp:
             gt_object_motions_valid=self.object_motions_valid,
             self_collision=cfg.self_collision,
         )
-        
+
         self.simulator.set_init_state(
                 self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
             )
         if self.simulator.object_collision_flag:
             self.simulator.create_resting_case()
-            
+
         if not pure_inference_mode:
             self.optimizer = torch.optim.Adam(
                 [
@@ -204,7 +202,6 @@ class InvPhyTrainerWarp:
                     wp.to_torch(self.simulator.wp_collide_object_fric),
                 ],
                 lr=cfg.base_lr,
-                betas=(0.9, 0.99),
             )
 
             if "debug" not in cfg.run_name:
@@ -410,10 +407,10 @@ class InvPhyTrainerWarp:
                         self.simulator.wp_states[-1].wp_v,
                     )
 
-            total_loss /= cfg.train_frame
+            total_loss /= cfg.train_frame - 1
             if cfg.data_type == "real":
-                total_chamfer_loss /= cfg.train_frame
-                total_track_loss /= cfg.train_frame
+                total_chamfer_loss /= cfg.train_frame - 1
+                total_track_loss /= cfg.train_frame - 1
             wandb.log(
                 {
                     "loss": total_loss,
@@ -577,30 +574,6 @@ class InvPhyTrainerWarp:
                 )
 
         vertices = torch.stack(vertices, dim=0)
-        # Add ground plane
-        # ground_plane_pts = self.create_ground_plane(
-        #     x_range=(-0.7, 0.7),
-        #     y_range=(-0.7, 0.7),
-        #     step=0.03,
-        #     z=0.0,
-        # )
-        # logger.info(f"Ground plane points: {ground_plane_pts.shape}")
-        # logger.info(f"Ground plane points: {ground_plane_pts}")
-        # Repeat for each frame
-        # ground_all_frames = ground_plane_pts.unsqueeze(0).repeat(vertices.shape[0], 1, 1)
-        # vertices = torch.cat([vertices[:, :self.num_all_points, :], ground_all_frames], dim=1)
-        
-        # DEBUG: Check particle data
-        print(f"Number of particles: {len(vertices[:, : self.num_all_points, :])}")
-        print(f"Particle positions min/max: {vertices[:, : self.num_all_points, :].min()}/{vertices[:, : self.num_all_points, :].max()}")
-        print(f"Real data shape: {self.dataset.object_points.shape}")
-        print(f"Simulation data shape: {vertices.shape}")
-        print(f"Real data range: {self.dataset.object_points.min()} to {self.dataset.object_points.max()}")
-        print(f"Simulation range: {vertices.min()} to {vertices.max()}")
-        
-        # DEBUG: Check coordinate system
-        print(f"reverse_z: {cfg.reverse_z}")
-        print(f"Camera WH: {cfg.WH}")
 
         if save_trajectory:
             logger.info(f"Save the trajectory to {save_path}")
@@ -939,21 +912,8 @@ class InvPhyTrainerWarp:
 
         if self.n_ctrl_parts == 1:
             current_target = self.hand_left_pos.unsqueeze(0)
-            # current_target = self.hand_left_pos.reshape(-1, 3)
-            # T_m2w = np.linalg.inv(cfg.T_world2marker)
-            # self.projection = self.intrinsic @ (self.w2c @ T_m2w)[:3, :]
-            # T_m2w = torch.as_tensor(T_m2w,
-            #             dtype=current_target.dtype,
-            #             device=current_target.device)
-            # T_w2m = torch.as_tensor(cfg.T_world2marker,
-            #             dtype=current_target.dtype,
-            #             device=current_target.device)
-            # cur_h = F.pad(current_target, (0, 1), value=1.0)
-            # cur_m_h = T_w2m @ cur_h.T
-            # current_target = cur_m_h.T[:, :3]
             # align = 'top-right'
             align = "center"
-            
             result = self._overlay_hand_at_position(
                 result, current_target, x_axis, hand_size, self.hand_left, align
             )
@@ -1043,8 +1003,6 @@ class InvPhyTrainerWarp:
 
         return result
 
-    
-
     def _find_closest_point(self, target_points):
         """Find the closest structure point to any of the target points."""
         dist_matrix = torch.sum(
@@ -1111,11 +1069,9 @@ class InvPhyTrainerWarp:
 
         gaussians = GaussianModel(sh_degree=3)
         gaussians.load_ply(gs_path)
-        print(f"gaussians._xyz shape: {gaussians._xyz.shape}")
-        # sys.exit()
         gaussians = remove_gaussians_with_low_opacity(gaussians, 0.1)
         gaussians.isotropic = True
-        current_pos = gaussians.get_xyz          # (N,3)
+        current_pos = gaussians.get_xyz
         current_rot = gaussians.get_rotation     # (N,4) quaternion
         current_opacity = gaussians.get_opacity 
         gaussians._opacity = current_opacity + 10.0
@@ -1128,12 +1084,6 @@ class InvPhyTrainerWarp:
         gaussians._xyz = current_pos
 
         current_rot = gaussians.get_rotation        # (N,4)
-        # q_motion = matrix_to_quaternion(R_motion)   # now already on correct device
-        # q_motion = q_motion.expand_as(current_rot)
-
-        # rot_new = quaternion_multiply(current_rot, q_motion)
-        # rot_new = rot_new / rot_new.norm(dim=1, keepdim=True)
-        # gaussians._rotation = rot_new
         rot_world2marker = R.from_matrix(cfg.T_world2marker[:3, :3])
         quat_world2marker = rot_world2marker.as_quat()
         quats_world_scipy = np.roll(current_rot.detach().cpu().numpy(), -1, axis=1)
@@ -1596,7 +1546,6 @@ class InvPhyTrainerWarp:
 
         if listener is not None:
             listener.stop()
-
 
     def interactive_robot(self, model_path, gs_path, n_ctrl_parts=1, inv_ctrl=False, virtual_key_input=False):
         # Load the model
@@ -2937,9 +2886,8 @@ class InvPhyTrainerWarp:
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (cfg.WH[0], cfg.WH[1]))
 
-        frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_refined/{cfg.start_frame:06d}.png"
-        frame = cv2.imread(frame_path)
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        video_reader = decord.VideoReader(f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted.mp4", ctx=decord.cpu(0))
+        frame = video_reader[cfg.start_frame].asnumpy()
 
         results = render_gaussian(view, gaussians, None, background)
         rendering = results["render"]  # (4, H, W)
@@ -3061,9 +3009,7 @@ class InvPhyTrainerWarp:
 
             prev_x = x.clone()
 
-            frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_refined/{i:06d}.png"
-            frame = cv2.imread(frame_path)
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = video_reader[i].asnumpy()
 
             results = render_gaussian(view, gaussians, None, background)
             rendering = results["render"]  # (4, H, W)
@@ -3229,9 +3175,8 @@ class InvPhyTrainerWarp:
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (cfg.WH[0], cfg.WH[1]))
 
-        frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_refined/{cfg.start_frame:06d}.png"
-        frame = cv2.imread(frame_path)
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        video_reader = decord.VideoReader(f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted.mp4", ctx=decord.cpu(0))
+        frame = video_reader[cfg.start_frame].asnumpy()
 
         results = render_gaussian(view, gaussians, None, background)
         rendering = results["render"]  # (4, H, W)
@@ -3392,9 +3337,7 @@ class InvPhyTrainerWarp:
 
             prev_x = x.clone()
 
-            frame_path = f"{cfg.overlay_path}/{cfg.cameras[vis_cam_idx]}/undistorted_refined/{i:06d}.png"
-            frame = cv2.imread(frame_path)
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = video_reader[i].asnumpy()
 
             results = render_gaussian(view, gaussians, None, background)
             rendering = results["render"]  # (4, H, W)

@@ -9,6 +9,8 @@ import pyrender
 import trimesh
 import os   
 import sys
+import decord
+import subprocess
 
 def visualize_pc(
     object_points,
@@ -39,6 +41,7 @@ def visualize_pc(
         logger.info("visualize_pc called but visualize=False, save_video=False, and return_frames=False - skipping")
         return None
     
+    video_readers = {}
     print(f"calling visualize_pc")
     # Deprecated function, use visualize_pc instead
     FPS = cfg.FPS
@@ -161,13 +164,14 @@ def visualize_pc(
             return None
         # Ensure the directory exists
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        logger.info(f"Saving video to: {save_path}")
+        temp_save_path = save_path.replace(".mp4", "_temp.mp4")
+        logger.info(f"Saving temporary video to: {temp_save_path}")
         # fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
-        video_writer = cv2.VideoWriter(save_path, fourcc, FPS, (width, height))
+        video_writer = cv2.VideoWriter(temp_save_path, fourcc, FPS, (width, height))
         if not video_writer.isOpened():
-            print(f"Failed to open video writer for {save_path}")
-            logger.error(f"Failed to open video writer for {save_path}")
+            print(f"Failed to open video writer for {temp_save_path}")
+            logger.error(f"Failed to open video writer for {temp_save_path}")
             return None
         # video_writer = cv2.VideoWriter(save_path, fourcc, FPS, (width, height))
     # Initialize frames list if return_frames is True
@@ -178,6 +182,18 @@ def visualize_pc(
     if controller_points is not None:
         controller_meshes = []
         prev_center = []
+
+    # Get all cameras sorted to ensure consistent indexing
+    if cfg.overlay_path is not None:
+        all_cameras = sorted([subdir for subdir in os.listdir(cfg.overlay_path) if "cam" in subdir])
+        if vis_cam_idx < len(all_cameras):
+            target_camera = all_cameras[vis_cam_idx]
+        else:
+            logger.warning(f"vis_cam_idx {vis_cam_idx} is out of bounds for cameras in {cfg.overlay_path}")
+            target_camera = None
+    else:
+        target_camera = None
+
     for i in range(object_points.shape[0]):
         object_pcd = o3d.geometry.PointCloud()
         if object_visibilities is None:
@@ -187,7 +203,6 @@ def visualize_pc(
             object_pcd.points = o3d.utility.Vector3dVector(
                 object_points[i, np.where(object_visibilities[i])[0], :]
             )
-            print(f"visibilities:{object_visibilities[i]}")
             object_pcd.colors = o3d.utility.Vector3dVector(
                 object_colors[i, np.where(object_visibilities[i])[0], :]
             )
@@ -254,11 +269,6 @@ def visualize_pc(
             else:
                 raise
 
-        cameras = [subdir for subdir in os.listdir(cfg.overlay_path) if "cam" in subdir and subdir not in cfg.remove_cams]
-
-        print(f"cameras: {cameras}")
-        print(f"len(cameras): {len(cameras)}")
-
         # Capture frame and write to video file if save_video is True, or collect if return_frames
         if save_video or return_frames:
             try:
@@ -274,14 +284,23 @@ def visualize_pc(
                     video_writer.release()
                 return None if not return_frames else []
             frame = (frame * 255).astype(np.uint8)
-            if cfg.overlay_path is not None:
+            if cfg.overlay_path is not None and target_camera is not None:
                 frame_num = cfg.start_frame + i
                 mask = np.all(frame == [255, 255, 255], axis=-1)
-                image_path = f"{cfg.overlay_path}/{cameras[vis_cam_idx]}/undistorted_refined/{frame_num:06d}.png"
-                overlay = cv2.imread(image_path)
-                if overlay is not None:
-                    overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+                
+                video_path = f"{cfg.overlay_path}/{target_camera}/undistorted.mp4"
+                if os.path.exists(video_path):
+                    if video_path not in video_readers:
+                        video_readers[video_path] = decord.VideoReader(video_path, ctx=decord.cpu(0))
+                    reader = video_readers[video_path]
+                    overlay = reader[frame_num].asnumpy()
                     frame[mask] = overlay[mask]  # Replace background
+                else:
+                    image_path = f"{cfg.overlay_path}/{target_camera}/undistorted_refined/{frame_num:06d}.png"
+                    overlay = cv2.imread(image_path)
+                    if overlay is not None:
+                        overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+                        frame[mask] = overlay[mask]  # Replace background
             if save_video:
                 # Convert RGB to BGR for video writer
                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -304,9 +323,31 @@ def visualize_pc(
     if save_video:
         print(f"Releasing video writer")
         video_writer.release()
+        
+        # Convert codec using ffmpeg
+        temp_save_path = save_path.replace(".mp4", "_temp.mp4")
+        if os.path.exists(temp_save_path):
+            logger.info(f"Converting video codec: {temp_save_path} -> {save_path}")
+            try:
+                subprocess.run([
+                    "ffmpeg", "-y",
+                    "-i", str(temp_save_path),
+                    "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p",
+                    "-crf", "23",
+                    str(save_path)
+                ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                os.remove(temp_save_path)
+                logger.info(f"Video converted and saved successfully: {save_path}")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"FFmpeg conversion failed: {e}")
+                # Fallback: rename temp to final if conversion failed
+                os.rename(temp_save_path, save_path)
+                logger.warning(f"Fallback: Saved unconverted video to {save_path}")
+        
         if os.path.exists(save_path):
             file_size = os.path.getsize(save_path)
-            logger.info(f"Video saved successfully: {save_path} ({file_size / 1024 / 1024:.2f} MB)")
+            logger.info(f"Final video size: {file_size / 1024 / 1024:.2f} MB")
         else:
             logger.error(f"Video file was not created: {save_path}")
     if return_frames:
@@ -374,8 +415,9 @@ def visualize_pc_grid(
     
     # Initialize video writer
     if save_video:
+        temp_save_path = save_path.replace(".mp4", "_temp.mp4")
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        video_writer = cv2.VideoWriter(save_path, fourcc, FPS, (output_width, output_height))
+        video_writer = cv2.VideoWriter(temp_save_path, fourcc, FPS, (output_width, output_height))
     
     for frame_idx in range(num_frames):
         # Create grid frame
@@ -406,4 +448,24 @@ def visualize_pc_grid(
     
     if save_video:
         video_writer.release()
-        logger.info(f"Saved grid video to {save_path}")
+        temp_save_path = save_path.replace(".mp4", "_temp.mp4")
+        if os.path.exists(temp_save_path):
+            logger.info(f"Converting grid video codec: {temp_save_path} -> {save_path}")
+            try:
+                subprocess.run([
+                    "ffmpeg", "-y",
+                    "-i", str(temp_save_path),
+                    "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p",
+                    "-crf", "23",
+                    str(save_path)
+                ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                os.remove(temp_save_path)
+                logger.info(f"Grid video converted and saved successfully: {save_path}")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"FFmpeg conversion failed for grid video: {e}")
+                # Fallback: rename temp to final if conversion failed
+                os.rename(temp_save_path, save_path)
+                logger.warning(f"Fallback: Saved unconverted grid video to {save_path}")
+        else:
+            logger.error(f"Grid video file was not created: {temp_save_path}")

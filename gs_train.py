@@ -12,10 +12,11 @@
 import os
 import torch
 import torch.nn.functional as F
-import zarr
+from utils.hdf5_utils import H5Array
 from PIL import Image
 import numpy as np
 from random import randint
+import decord
 from gaussian_splatting.utils.loss_utils import l1_loss, ssim, depth_loss, normal_loss, anisotropic_loss
 from gaussian_splatting.gaussian_renderer import render, network_gui
 import sys
@@ -51,6 +52,7 @@ except:
     SPARSE_ADAM_AVAILABLE = False
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, start_frame=0, end_frame=60000, num_frames=60000, use_wandb=False, wandb_project=None):
+    video_readers = {}
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
@@ -135,14 +137,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         pred_seg = image[3:, ...]
         image = image[:3, ...]
         
-        mask = zarr.open(viewpoint_cam.mask_path, mode="r")
-        print(f"time_idx: {viewpoint_cam.time_idx}")
-        sys.exit()
-        mask = mask[viewpoint_cam.time_idx, :, :]
+        with H5Array(viewpoint_cam.mask_path, mode="r") as mask_f:
+            mask = mask_f[viewpoint_cam.time_idx, :, :]
         mask = torch.from_numpy(mask).float() 
         mask = mask.unsqueeze(0)  # (1, H, W) or (C, H, W)
         
-        gt_image = Image.open(viewpoint_cam.image_path).convert("RGB")
+        if viewpoint_cam.image_path.endswith(".mp4"):
+            if viewpoint_cam.image_path not in video_readers:
+                video_readers[viewpoint_cam.image_path] = decord.VideoReader(viewpoint_cam.image_path, ctx=decord.cpu(0))
+            reader = video_readers[viewpoint_cam.image_path]
+            gt_image = reader[viewpoint_cam.time_idx].asnumpy()
+            gt_image = Image.fromarray(gt_image)
+        else:
+            gt_image = Image.open(viewpoint_cam.image_path).convert("RGB")
+        
         gt_image = gt_image.resize((viewpoint_cam.image_width, viewpoint_cam.image_height))
         gt_image = torch.from_numpy(np.array(gt_image)).float() / 255.0  # Convert to tensor [0,1]
         gt_image = gt_image.permute(2, 0, 1).unsqueeze(0)  # (1, 3, H, W)

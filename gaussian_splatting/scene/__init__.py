@@ -20,7 +20,6 @@ from ..utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 import open3d as o3d
 import numpy as np
 import torch
-import sys
 
 class Scene:
 
@@ -45,7 +44,7 @@ class Scene:
 
         self.train_cameras = {}
         self.test_cameras = {}
-        print(f"args.white_background: {args.white_background}")
+
         if brics:
             scene_info = sceneLoadTypeCallbacks["brics"](args.source_path, args.white_background, args.eval, start_frame=start_frame, end_frame=end_frame, num_frames=num_frames)    
         elif os.path.exists(os.path.join(args.source_path, "sparse")):
@@ -88,20 +87,12 @@ class Scene:
         self.gaussians.isotropic = args.isotropic
 
         if self.loaded_iter:
-            print(f"model_path: {self.model_path}")
-            # self.gaussians.load_ply(os.path.join(self.model_path,
-            #                                                "point_cloud",
-            #                                                "iteration_" + str(self.loaded_iter),
-            #                                                "point_cloud.ply"))
             print(f"loading pcd_4dgs1111/frame_{self.loaded_iter:06d}_time_0.000000.ply")
             gs_dir = os.path.join(self.model_path, "pcd_4dgs1111")
             gs_files = [gs for gs in sorted(os.listdir(gs_dir)) if gs.startswith(f"frame_{self.loaded_iter:06d}_time_")]
             base_gs_file = gs_files[start_frame]
             print(f"loading {os.path.join(gs_dir, base_gs_file)}")
             self.gaussians.load_ply(os.path.join(gs_dir, base_gs_file))
-            
-            print(f"gaussians._scaling shape: {self.gaussians._scaling.shape}")
-            print(f"unique scales: {torch.unique(self.gaussians._scaling)}")
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, scene_info.train_cameras, self.cameras_extent)
 

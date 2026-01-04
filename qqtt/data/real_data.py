@@ -77,7 +77,6 @@ class RealData:
         self.structure_points = torch.tensor(
             self.structure_points, dtype=torch.float32, device=cfg.device
         )
-        print(f"Do structure_points match object_points[0]? {np.allclose(self.structure_points.cpu().numpy(), object_points[0])}")
         self.object_points = torch.tensor(
             object_points, dtype=torch.float32, device=cfg.device
         )

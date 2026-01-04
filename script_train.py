@@ -43,9 +43,9 @@ def train_episode(base_path, ep_idx, remove_cams=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train episodes")
     parser.add_argument("--base_path", type=str, 
-                       default="/oscar/data/gdk/hli230/projects/vitac-particle/008-pink-cloth",
+                       default="/mnt/data/ParticleData/processed/2025-12-15-163-bear",
                        help="Base path to episodes")
-    parser.add_argument("--ep_idx", type=int, default=None,
+    parser.add_argument("--ep_idx", type=int, default=0,
                        help="Specific episode index to train (if not provided, trains all)")
     
     args = parser.parse_args()

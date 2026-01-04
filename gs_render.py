@@ -31,7 +31,7 @@ from kornia import create_meshgrid
 import copy
 import pytorch3d
 import pytorch3d.ops as ops
-import zarr
+from utils.hdf5_utils import H5Array
 import sys
 
 
@@ -173,8 +173,8 @@ def remove_gaussians_with_mask(gaussians, views):
 
             # Check if (u, v) coordinates are within the image bounds
             print(f"view.mask_path: {view.mask_path}")
-            mask = zarr.open(view.mask_path, mode="r")
-            mask = mask[view.time_idx, :, :]
+            with H5Array(view.mask_path, mode="r") as mask_f:
+                mask = mask_f[view.time_idx, :, :]
             alpha_mask = torch.from_numpy(mask).float() 
             print(f"mask shape: {mask.shape}")
             # alpha_mask = view.alpha_mask.squeeze(0)    # Assuming mask is a 2D tensor on CUDA with shape [H, W]

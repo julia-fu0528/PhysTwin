@@ -48,6 +48,7 @@ from gaussian_splatting.dynamic_utils import (
 )
 import pickle
 import imageio
+import decord
 
 
 def create_grid_frame(images, grid_shape=None):
@@ -93,6 +94,7 @@ def render_set(
     disable_sh=False,
     start_frame=0,
 ):
+    video_readers = {}
     
     print(f"views shape: {len(views)}")
     render_path = os.path.join(output_path, name)
@@ -144,16 +146,24 @@ def render_set(
 
             # Load original image from camera if available
             if hasattr(view, 'image_path') and view.image_path is not None and os.path.exists(view.image_path):
-                image_path = view.image_path.replace("000000", f"{frame_idx + start_frame:06d}")
                 try:
-                    # Load original image as RGB
-                    gt_image = Image.open(image_path).convert("RGB")
+                    if view.image_path.endswith(".mp4"):
+                        if view.image_path not in video_readers:
+                            video_readers[view.image_path] = decord.VideoReader(view.image_path, ctx=decord.cpu(0))
+                        reader = video_readers[view.image_path]
+                        # Use frame_idx + start_frame as the frame index in the video
+                        gt_image = reader[frame_idx + start_frame].asnumpy()
+                        gt_image = Image.fromarray(gt_image)
+                    else:
+                        image_path = view.image_path.replace("000000", f"{frame_idx + start_frame:06d}")
+                        gt_image = Image.open(image_path).convert("RGB")
+                    
                     gt_image = gt_image.resize((view.image_width, view.image_height))
                     gt_image = torch.from_numpy(np.array(gt_image)).float() / 255.0  # [0, 1]
                     gt_image = gt_image.permute(2, 0, 1)  # (3, H, W)
                     gt_image = gt_image.to(rendering.device)
                 except Exception as e:
-                    print(f"Warning: Could not load image from {image_path}: {e}")
+                    print(f"Warning: Could not load image from {view.image_path}: {e}")
                     # Fallback: use background color
                     bg_color = background if isinstance(background, torch.Tensor) else torch.tensor(background, device=rendering.device)
                     gt_image = bg_color.unsqueeze(1).unsqueeze(2).expand(3, rendering.shape[1], rendering.shape[2])  # (3, H, W)

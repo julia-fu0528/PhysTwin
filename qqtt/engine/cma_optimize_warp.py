@@ -9,7 +9,6 @@ import warp as wp
 import cma
 import pickle
 import os
-import sys
 
 
 class OptimizerCMA:
@@ -203,7 +202,7 @@ class OptimizerCMA:
         assert min < max, "The minimum value should be less than the maximum value"
         return value * (max - min) + min
 
-    def optimize(self, max_iter=100, start_iter=0):
+    def optimize(self, max_iter=100):
         # Initialize the parameters
         init_global_spring_Y = self.normalize(
             cfg.init_spring_Y, cfg.spring_Y_min, cfg.spring_Y_max
@@ -236,60 +235,14 @@ class OptimizerCMA:
             init_drag_damping,
             init_dashpot_damping,
         ]
-        
-        # Checkpoint path
-        checkpoint_dir = f"{cfg.base_dir}/optimizeCMA"
-        checkpoint_path = f"{checkpoint_dir}/cma_checkpoint.pkl"
-        
-        # Try to load checkpoint if resuming
-        if start_iter > 0:
-            if os.path.exists(checkpoint_path):
-                logger.info(f"Loading checkpoint from {checkpoint_path}")
-                with open(checkpoint_path, 'rb') as f:
-                    checkpoint = pickle.load(f)
-                    es = checkpoint['es']
-                    saved_iter = checkpoint.get('iteration', start_iter)
-                    logger.info(f"Resumed from iteration {saved_iter}")
-                    start_iter = saved_iter
-            else:
-                logger.warning(f"Checkpoint not found at {checkpoint_path}, starting from beginning")
-                start_iter = 0
-        
-        # Initialize CMA-ES if not resuming
-        if start_iter == 0:
-            self.error_func(
-                x_init, visualize=True, video_path=f"{cfg.base_dir}/optimizeCMA/init.mp4"
-            )
-            
-            std = 1 / 6
-            es = cma.CMAEvolutionStrategy(x_init, std, {"bounds": [0.0, 1.0], "seed": 42})
-        
-        # Custom optimization loop to save videos after each iteration
-        for iteration in range(start_iter, max_iter):
-            logger.info(f"Starting iteration {iteration + 1}/{max_iter}")
-            
-            # Run one iteration of CMA-ES
-            es.optimize(self.error_func, iterations=1)
-            
-            # Get current best solution and save video
-            current_best = es.result[0]
-            current_error = es.result[1]
-            
-            logger.info(f"Iteration {iteration + 1}: Best error = {current_error}")
-            
-            # Save video for this iteration
-            video_path = f"{cfg.base_dir}/optimizeCMA/iter_{iteration + 1:03d}.mp4"
-            self.error_func(
-                current_best, visualize=True, video_path=video_path
-            )
-            
-            # Log progress
-            logger.info(f"Saved video: {video_path}")
-            
-            # Save checkpoint after each iteration
-            checkpoint = {'es': es, 'iteration': iteration + 1}
-            with open(checkpoint_path, 'wb') as f:
-                pickle.dump(checkpoint, f)
+
+        self.error_func(
+            x_init, visualize=True, video_path=f"{cfg.base_dir}/optimizeCMA/init.mp4"
+        )
+
+        std = 1 / 6
+        es = cma.CMAEvolutionStrategy(x_init, std, {"bounds": [0.0, 1.0], "seed": 42})
+        es.optimize(self.error_func, iterations=max_iter)
 
         # Get the results
         res = es.result
@@ -317,7 +270,7 @@ class OptimizerCMA:
             visualize=True,
             video_path=f"{cfg.base_dir}/optimizeCMA/optimal.mp4",
         )
-        
+
         optimal_results = {}
         optimal_results["global_spring_Y"] = final_global_spring_Y
         optimal_results["object_radius"] = final_object_radius
@@ -336,7 +289,7 @@ class OptimizerCMA:
         with open(f"{cfg.base_dir}/optimal_params.pkl", "wb") as f:
             pickle.dump(optimal_results, f)
 
-    def error_func(self, parameters, visualize=True, video_path=None):
+    def error_func(self, parameters, visualize=False, video_path=None):
         global_spring_Y = self.denormalize(
             parameters[0], cfg.spring_Y_min, cfg.spring_Y_max
         )
@@ -407,8 +360,6 @@ class OptimizerCMA:
         self.simulator.set_init_state(
             self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
         )
-        if self.simulator.object_collision_flag:
-            self.simulator.create_resting_case()
 
         if self.simulator.object_collision_flag:
             self.simulator.create_resting_case()
@@ -428,9 +379,6 @@ class OptimizerCMA:
         # else:
             # max_frame = self.dataset.frame_len
 
-        # for j in range(1, max_frame):
-        # Ensure we don't go out of bounds - set_controller_target accesses controller_points[j] and controller_points[j-1]
-        # So we need j < len(controller_points) and j-1 >= 0, which means j can go from 1 to len(controller_points)-1
         if self.controller_points is not None:
             max_safe_frame = min(max_frame, self.controller_points.shape[0])
         else:
@@ -458,15 +406,8 @@ class OptimizerCMA:
                 vertices.append(x.cpu())
 
             if cfg.data_type == "real":
-                # if wp.to_torch(self.simulator.acc_count, requires_grad=False)[0] == 0:
-                acc_tensor = wp.to_torch(self.simulator.acc_count, requires_grad=False)
-                # print(f"acc_tensor shape: {acc_tensor.shape}")
-                # print(f"acc_tensor device: {acc_tensor.device}")
-                # print(f"acc_tensor dtype: {acc_tensor.dtype}")
-                if acc_tensor.numel() > 0:
-                    value = acc_tensor[0].item()  # Use .item() for scalar
-                    if value == 0:
-                        self.simulator.set_acc_count(True)
+                if wp.to_torch(self.simulator.acc_count, requires_grad=False)[0] == 0:
+                    self.simulator.set_acc_count(True)
 
                 # Update the prev_acc used to calculate the acceleration loss
                 self.simulator.update_acc()
@@ -481,20 +422,15 @@ class OptimizerCMA:
                 self.simulator.wp_states[-1].wp_v,
             )
 
-        total_loss /= cfg.train_frame
-        
+        total_loss /= cfg.train_frame - 1
+
         if visualize == True:
             vertices = torch.stack(vertices, dim=0)
-            # DEBUG: Check particle data
-            print(f"Number of particles: {len(vertices[:, : self.num_all_points, :])}")
-            print(f"Particle positions min/max: {vertices[:, : self.num_all_points, :].min()}/{vertices[:, : self.num_all_points, :].max()}")
-            
-            # self.object_colors = np.ones_like(self.object_points) * [1, 0, 0]  # Bright red
             visualize_pc(
                 vertices[:, : self.num_all_points, :],
                 self.object_colors,
                 self.controller_points,
-                visualize=visualize,
+                visualize=False,
                 save_video=True,
                 save_path=video_path,
                 vis_cam_idx=23,

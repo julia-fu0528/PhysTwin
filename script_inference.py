@@ -2,14 +2,14 @@ import glob
 import os
 import json
 
-base_path = "/ParticleData/processed/2025-12-15-163-bear/"
+base_path = "/mnt/data/ParticleData/processed/2025-12-15-163-bear"
 REMOVE_CAMS = "brics-odroid-003_cam0,brics-odroid-003_cam1,\
 brics-odroid-004_cam0,\
 brics-odroid-014_cam0,\
 brics-odroid-018_cam0,brics-odroid-018_cam1,\
 brics-odroid-019_cam0,\
 "
-dir_names = glob.glob(f"{base_path}/episode_*") 
+dir_names = glob.glob(f"{base_path}/episode_0") 
 for i, dir_name in enumerate(dir_names):
     if i != 0:
         continue

@@ -90,11 +90,21 @@ def set_control_points(
     # Set the control points in each substep
     tid = wp.tid()
 
-    t = float(step + 1) / float(num_substeps)
+    t = float(step + 1) / float(num_substeps    )
     control_x[tid] = (
         original_control_point[tid]
         + (target_control_point[tid] - original_control_point[tid]) * t
     )
+
+
+@wp.kernel(enable_backward=False)
+def set_state_control_points(
+    control_x: wp.array(dtype=wp.vec3),
+    num_object_points: int,
+    x: wp.array(dtype=wp.vec3),
+):
+    tid = wp.tid()
+    x[num_object_points + tid] = control_x[tid]
 
 
 @wp.kernel
@@ -164,7 +174,6 @@ def update_vel_from_force(
     dt: float,
     drag_damping: float,
     reverse_factor: float,
-    T_world2marker: wp.mat44,
     v_new: wp.array(dtype=wp.vec3),
 ):
     tid = wp.tid()
@@ -175,13 +184,6 @@ def update_vel_from_force(
 
     drag_damping_factor = wp.exp(-dt * drag_damping)
     all_force = f0 + m0 * wp.vec3(0.0, 0.0, -9.8) * reverse_factor
-    # all_force = wp.mat33(
-    #     T_world2marker[0, 0], T_world2marker[0, 1], T_world2marker[0, 2],
-    #     T_world2marker[1, 0], T_world2marker[1, 1], T_world2marker[1, 2],
-    #     T_world2marker[2, 0], T_world2marker[2, 1], T_world2marker[2, 2]
-    # ) * all_force
-    # all_force = f0 + m0 * wp.vec3(0.0, 0.0, 9.8)
-    # all_force = f0 + m0 * wp.vec3(0.0, -9.8, 0.0) * reverse_factor
     a = all_force / m0
     v1 = v0 + a * dt
     v2 = v1 * drag_damping_factor
@@ -213,8 +215,12 @@ def loop(
         index = collision_indices[i][k]
         x2 = x[index]
         v2 = v[index]
-        m2 = masses[index]
-        mask2 = masks[index]
+        if index < masks.shape[0]:
+            m2 = masses[index]
+            mask2 = masks[index]
+        else:
+            m2 = 1e6
+            mask2 = -1
 
         dis = x2 - x1
         dis_len = wp.length(dis)
@@ -269,7 +275,10 @@ def update_potential_collision(
     i = wp.hash_grid_point_id(grid, tid)
 
     x1 = x[i]
-    mask1 = masks[i]
+    if i < masks.shape[0]:
+        mask1 = masks[i]
+    else:
+        mask1 = -1
 
     neighbors = wp.hash_grid_query(grid, x1, collision_dist * 5.0)
     for index in neighbors:
@@ -277,7 +286,10 @@ def update_potential_collision(
             if resting_collision_pairs[i][index] == True or resting_collision_pairs[index][i] == True:
                 continue
             x2 = x[index]
-            mask2 = masks[index]
+            if index < masks.shape[0]:
+                mask2 = masks[index]
+            else:
+                mask2 = -1
 
             dis = x2 - x1
             dis_len = wp.length(dis)
@@ -459,18 +471,6 @@ def mesh_collision(
     v_new[tid] = next_v
 
 
-    tid = wp.tid()
-
-    # order threads by cell
-    i = wp.hash_grid_point_id(grid, tid)
-
-    x1 = x[i]
-
-    neighbors = wp.hash_grid_query(grid, x1, collision_dist)
-    for index in neighbors:
-        if index < i:
-            resting_collision_pairs[i][index] = wp.bool(1)
-            resting_collision_pairs[index][i] = wp.bool(1)
 @wp.kernel
 def integrate_ground_collision(
     x: wp.array(dtype=wp.vec3),
@@ -479,42 +479,21 @@ def integrate_ground_collision(
     collide_fric: wp.array(dtype=float),
     dt: float,
     reverse_factor: float,
-    T_world2marker: wp.mat44,
     x_new: wp.array(dtype=wp.vec3),
     v_new: wp.array(dtype=wp.vec3),
 ):
     tid = wp.tid()
 
     x0 = x[tid]
-    x0_homogeneous = wp.vec4(x0[0], x0[1], x0[2], 1.0)
-    # T_mat = T_world2marker
-    # x0_transformed = T_mat * x0_homogeneous
-    # x0 = wp.vec3(x0_transformed[0], x0_transformed[1], x0_transformed[2])
-
     v0 = v[tid]
-    # R_mat = wp.mat33(
-    #     T_world2marker[0, 0], T_world2marker[0, 1], T_world2marker[0, 2],
-    #     T_world2marker[1, 0], T_world2marker[1, 1], T_world2marker[1, 2],
-    #     T_world2marker[2, 0], T_world2marker[2, 1], T_world2marker[2, 2]
-    # )
-    # v0 = R_mat * v0
 
-    normal = wp.vec3(0.0, 0.0, 1.0) * reverse_factor 
-    # normal = R_mat * normal
-    # normal = wp.vec3(0.0, 0.0, -1.0) 
-    # normal = wp.vec3(0.0, 1.0, 0.0) * reverse_factor
+    normal = wp.vec3(0.0, 0.0, 1.0) * reverse_factor
 
     x_z = x0[2]
     v_z = v0[2]
-    # x_y = x0[1]
-    # v_y = v0[1]
     next_x_z = (x_z + v_z * dt) * reverse_factor
-    # next_x_z = - (x_z + v_z * dt) 
-    # next_x_y = (x_y + v_y * dt) * reverse_factor
 
-    if next_x_z < 0.0 and v_z * reverse_factor < -1e-4: # 391
-    # if next_x_z < 0.0 and - v_z < -1e-4:
-    # if next_x_y < 0.17 and v_y * reverse_factor < -1e-4:
+    if next_x_z < 0.0 and v_z * reverse_factor < -1e-4:
         # Ground Collision
         v_normal = wp.dot(v0, normal) * normal
         v_tao = v0 - v_normal
@@ -536,7 +515,6 @@ def integrate_ground_collision(
 
         v1 = v_normal_new + v_tao_new
         toi = -x_z / v_z
-        # toi = -x_y / v_y
     else:
         v1 = v0
         toi = 0.0
@@ -865,7 +843,7 @@ class SpringMassSystemWarp:
 
         if self.object_collision_flag:
             self.wp_masks = wp.from_torch(
-                init_masks[:num_object_points].int(),
+                init_masks[:num_object_points].int().contiguous(),
                 dtype=wp.int32,
                 requires_grad=False,
             )
@@ -901,13 +879,13 @@ class SpringMassSystemWarp:
 
         # # Do some initialization to initialize the warp cuda graph
         self.wp_springs = wp.from_torch(
-            init_springs, dtype=wp.vec2i, requires_grad=False
+            init_springs.contiguous(), dtype=wp.vec2i, requires_grad=False
         )
         self.wp_rest_lengths = wp.from_torch(
-            init_rest_lengths, dtype=wp.float32, requires_grad=False
+            init_rest_lengths.contiguous(), dtype=wp.float32, requires_grad=False
         )
         self.wp_masses = wp.from_torch(
-            init_masses[:num_object_points], dtype=wp.float32, requires_grad=False
+            init_masses[:num_object_points].contiguous(), dtype=wp.float32, requires_grad=False
         )
         if cfg.data_type == "real":
             self.prev_acc = wp.zeros_like(self.wp_init_vertices, requires_grad=False)
@@ -918,12 +896,12 @@ class SpringMassSystemWarp:
         )
         if cfg.data_type == "real":
             self.wp_current_object_visibilities = wp.from_torch(
-                self.gt_object_visibilities[1].clone(),
+                self.gt_object_visibilities[1].clone().contiguous(),
                 dtype=wp.int32,
                 requires_grad=False,
             )
             self.wp_current_object_motions_valid = wp.from_torch(
-                self.gt_object_motions_valid[0].clone(),
+                self.gt_object_motions_valid[0].clone().contiguous(),
                 dtype=wp.int32,
                 requires_grad=False,
             )
@@ -932,12 +910,12 @@ class SpringMassSystemWarp:
 
             if self.controller_points is not None:
                 self.wp_original_control_point = wp.from_torch(
-                    self.controller_points[0].clone(),
+                    self.controller_points[0].clone().contiguous(),
                     dtype=wp.vec3,
                     requires_grad=False,
                 )
                 self.wp_target_control_point = wp.from_torch(
-                    self.controller_points[1].clone(),
+                    self.controller_points[1].clone().contiguous(),
                     dtype=wp.vec3,
                     requires_grad=False,
                 )
@@ -966,28 +944,25 @@ class SpringMassSystemWarp:
             * torch.ones(self.n_springs, dtype=torch.float32, device=self.device),
             requires_grad=True,
         )
-        # Ensure collision_learn is a boolean
-        collision_learn_bool = bool(cfg.collision_learn)
-        
         self.wp_collide_elas = wp.from_torch(
             torch.tensor([collide_elas], dtype=torch.float32, device=self.device),
-            requires_grad=collision_learn_bool,
+            requires_grad=cfg.collision_learn,
         )
         self.wp_collide_fric = wp.from_torch(
             torch.tensor([collide_fric], dtype=torch.float32, device=self.device),
-            requires_grad=collision_learn_bool,
+            requires_grad=cfg.collision_learn,
         )
         self.wp_collide_object_elas = wp.from_torch(
             torch.tensor(
                 [collide_object_elas], dtype=torch.float32, device=self.device
             ),
-            requires_grad=collision_learn_bool,
+            requires_grad=cfg.collision_learn,
         )
         self.wp_collide_object_fric = wp.from_torch(
             torch.tensor(
                 [collide_object_fric], dtype=torch.float32, device=self.device
             ),
-            requires_grad=collision_learn_bool,
+            requires_grad=cfg.collision_learn,
         )
 
         # Load the static meshes
@@ -1099,14 +1074,26 @@ class SpringMassSystemWarp:
             wp.launch(
                 copy_vec3,
                 dim=self.num_control_points,
-                inputs=[self.controller_points[frame_idx - 1].contiguous()],
-                outputs=[self.wp_original_control_point.contiguous()],
+                inputs=[
+                    wp.from_torch(
+                        self.controller_points[frame_idx - 1].clone().contiguous(),
+                        dtype=wp.vec3,
+                        requires_grad=False,
+                    )
+                ],
+                outputs=[self.wp_original_control_point],
             )
             wp.launch(
                 copy_vec3,
                 dim=self.num_control_points,
-                inputs=[self.controller_points[frame_idx].contiguous()],
-                outputs=[self.wp_target_control_point.contiguous()],
+                inputs=[
+                    wp.from_torch(
+                        self.controller_points[frame_idx].clone().contiguous(),
+                        dtype=wp.vec3,
+                        requires_grad=False,
+                    )
+                ],
+                outputs=[self.wp_target_control_point],
             )
 
         if not pure_inference:
@@ -1148,13 +1135,13 @@ class SpringMassSystemWarp:
             copy_vec3,
             dim=self.num_control_points,
             inputs=[last_controller_interactive.contiguous()],
-            outputs=[self.wp_original_control_point.contiguous()],
+            outputs=[self.wp_original_control_point],
         )
         wp.launch(
             copy_vec3,
             dim=self.num_control_points,
             inputs=[controller_interactive.contiguous()],
-            outputs=[self.wp_target_control_point.contiguous()],
+            outputs=[self.wp_target_control_point],
         )
 
     def set_init_state(self, wp_x, wp_v, pure_inference=False):
@@ -1184,13 +1171,23 @@ class SpringMassSystemWarp:
                 inputs=[wp_x],
                 outputs=[self.wp_states[0].wp_x],
             )
+            if self.controller_points is not None:
+                wp.launch(
+                    set_state_control_points,
+                    dim=self.num_control_points,
+                    inputs=[
+                        self.wp_original_control_point,
+                        self.num_object_points,
+                    ],
+                    outputs=[self.wp_states[0].wp_x],
+                )
             wp.launch(
                 copy_vec3,
                 dim=self.num_object_points,
                 inputs=[wp_v],
                 outputs=[self.wp_states[0].wp_v],
             )
-            
+
     def set_acc_count(self, acc_count):
         if acc_count:
             input = 1
@@ -1285,6 +1282,15 @@ class SpringMassSystemWarp:
                     ],
                     outputs=[self.wp_states[i].wp_control_x],
                 )
+                wp.launch(
+                    set_state_control_points,
+                    dim=self.num_control_points,
+                    inputs=[
+                        self.wp_states[i].wp_control_x,
+                        self.num_object_points,
+                    ],
+                    outputs=[self.wp_states[i + 1].wp_x],
+                )
 
             # Calculate the spring forces
             wp.launch(
@@ -1322,7 +1328,6 @@ class SpringMassSystemWarp:
                     self.dt,
                     self.drag_damping,
                     self.reverse_factor,
-                    self.wp_T_world2marker,
                 ],
                 outputs=[output_v],
             )
@@ -1395,7 +1400,6 @@ class SpringMassSystemWarp:
                     self.wp_collide_fric,
                     self.dt,
                     self.reverse_factor,
-                    self.wp_T_world2marker,
                 ],
                 outputs=[self.wp_states[i + 1].wp_x, self.wp_states[i + 1].wp_v],
             )

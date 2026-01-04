@@ -12,7 +12,7 @@ class Config:
 
         self.dashpot_damping = 100
         self.drag_damping = 3
-        self.base_lr = 1e-3
+        self.base_lr = 2e-4
         self.iterations = 250
         self.vis_interval = 10
         self.init_spring_Y = 3e3
@@ -68,9 +68,6 @@ class Config:
                     value = int(value)
                 elif isinstance(current_value, float):
                     value = float(value)
-                elif isinstance(current_value, list) and value is not None:
-                    # Keep list as-is (YAML will load it as a list)
-                    pass
                 setattr(self, key, value)
 
     def load_from_yaml(self, file_path):

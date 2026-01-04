@@ -92,7 +92,7 @@ if __name__ == "__main__":
     cfg.WH = data["WH"]
     # cfg.overlay_path = f"{base_path}/{case_name}/color"
     cfg.overlay_path = f"{base_path}/{case_name}"
-    cfg.cameras = [subdir for subdir in os.listdir(cfg.overlay_path) if "cam" in subdir]
+    cfg.cameras = sorted([subdir for subdir in os.listdir(cfg.overlay_path) if "cam" in subdir])
     cfg.start_frame = data["start_frame"]
     cfg.end_frame = data["end_frame"]
     
@@ -105,4 +105,4 @@ if __name__ == "__main__":
         train_frame=train_frame,
         remove_cams=remove_cams,
     )
-    optimizer.optimize(max_iter=max_iter, start_iter=start_iter)
+    optimizer.optimize(max_iter=max_iter)

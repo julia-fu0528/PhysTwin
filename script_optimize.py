@@ -45,9 +45,9 @@ def optimize_episode(base_path, ep_idx, max_iter=20, remove_cams=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Optimize episodes")
     parser.add_argument("--base_path", type=str, 
-                       default="/oscar/data/gdk/hli230/projects/vitac-particle/008-pink-cloth",
+                       default="/mnt/data/ParticleData/processed/2025-12-15-163-bear",
                        help="Base path to episodes")
-    parser.add_argument("--ep_idx", type=int, default=None,
+    parser.add_argument("--ep_idx", type=int, default=0,
                        help="Specific episode index to optimize (if not provided, optimizes all)")
     parser.add_argument("--max_iter", type=int, default=20,
                        help="Maximum iterations for optimization")

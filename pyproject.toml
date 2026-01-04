@@ -1,0 +1,118 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "visuotactile-particle"
+version = "0.1.0"
+description = "PhysTwin environment handling"
+requires-python = ">=3.12"
+dependencies = ["h5py>=3.15.1,<4", "decord>=0.6.0,<0.7"]
+
+[tool.pixi.workspace]
+channels = ["conda-forge", "pytorch", "nvidia"]
+platforms = ["linux-64"]
+
+[tool.pixi.system-requirements]
+cuda = "12.0"
+libc = { family = "glibc", version = "2.35" } # Consistent with ubuntu 22.04
+
+[tool.pixi.activation.env]
+TORCH_CUDA_ARCH_LIST = "12.0+PTX"
+DEBIAN_FRONTEND = "noninteractive"
+QT_DEBUG_PLUGINS = "1"
+QT_QPA_PLATFORM = "xcb"
+
+[tool.pixi.dependencies]
+python = "3.12.*"
+pip = "*"
+# System tools
+git = "*"
+wget = "*"
+cmake = "*"
+make = "*"
+gcc = "11.*"
+gxx = "11.*"
+ninja = "*"
+# Graphics/System Libraries (Approximation of apt-get packages)
+mesa-libgl-devel-cos7-x86_64 = "*" # For libgl1-mesa-glx
+libxcb = "*"
+xorg-libx11 = "*"
+xorg-libxext = "*"
+xorg-libxrender = "*"
+xorg-libxinerama = "*"
+xorg-libxi = "*"
+pynput = "*"
+
+[tool.pixi.pypi-dependencies]
+# Core ML
+torch = { version = ">=2.8.0" }
+torchvision = { version = "*" }
+torchaudio = { version = "*" }
+numpy = "==1.26.4"
+warp-lang = "*" # Version wasn't pinned in Dockerfile command, assuming latest compliant
+usd-core = "*"
+matplotlib = "*"
+pyglet = "<2"
+open3d = "*"
+trimesh = "*"
+rtree = "*"
+pyrender = "*"
+
+# Utilities
+stannum = "*"
+termcolor = "*"
+fvcore = "*"
+wandb = "*"
+moviepy = "*"
+imageio = "*"
+opencv-python = "*"
+cma = "*"
+Cython = "*"
+pyrealsense2 = "*"
+atomics = "*"
+plyfile = "*"
+einops = "*"
+
+# Grounded SAM 2 deps (some might be redundant but listed for clarity if needed explicitly)
+# Note: install via task
+
+# Image Upscaler / SDXL
+diffusers = "*"
+accelerate = "*"
+kornia = "*"
+ninja = "*"
+jaxtyping = "*"
+rich = "*"
+
+# Flash Attention
+# Flash Attention (moved to tasks)
+
+# Local Submodules (managed via tasks for editable/no-build-isolation installs if needed, or mapped here if they exist on PyPI and that's preferred. Dockerfile installs local dirs.)
+
+[tool.pixi.tasks]
+# Post-install setup to mimic Dockerfile steps
+install-grounded-sam2 = { cmd = "bash -c 'if [ ! -d Grounded-SAM-2 ]; then git clone https://github.com/IDEA-Research/Grounded-SAM-2.git; fi && cd Grounded-SAM-2/checkpoints/ && bash download_ckpts.sh && cd ../gdino_checkpoints/ && bash download_ckpts.sh && cd .. && pip install -e . && pip install --no-build-isolation -e grounding_dino'", depends-on = ["install-pip-deps"] }
+
+# Installing local submodules
+install-submodules-rasterization = { cmd = "pip install --no-build-isolation gaussian_splatting/submodules/diff-gaussian-rasterization/", depends-on = ["install-pip-deps"] }
+install-submodules-simpleknn = { cmd = "pip install --no-build-isolation gaussian_splatting/submodules/simple-knn/", depends-on = ["install-pip-deps"] }
+
+# Pytorch3D
+install-pytorch3d = { cmd = "bash -c 'if [ ! -d pytorch3d ]; then git clone https://github.com/facebookresearch/pytorch3d.git; fi && pip install --no-build-isolation pytorch3d/'", depends-on = ["install-pip-deps"] }
+
+# Dummy task to ensure pip deps are ready before complex compilatons if needed, though pixi handles this mostly.
+install-pip-deps = { cmd = "echo 'Pip dependencies assumed installed by environment creation'", description = "Placeholder to ensure ordering" }
+
+# Flash Attention
+install-flash-attn = { cmd = "pip install flash-attn --no-build-isolation", depends-on = ["install-pip-deps"] }
+
+# gsplat from git
+install-gsplat = { cmd = "pip install git+https://github.com/nerfstudio-project/gsplat.git --no-build-isolation", depends-on = ["install-pip-deps"] }
+
+# All-in-one setup
+setup-custom-packages = { cmd = "echo 'Setting up custom packages...'", depends-on = ["install-grounded-sam2", "install-submodules-rasterization", "install-submodules-simpleknn", "install-pytorch3d", "install-flash-attn", "install-gsplat"] }
+
+[tool.uv]
+index-url = "https://download.pytorch.org/whl/cu128"
+extra-index-url = ["https://pypi.org/simple"]

@@ -1,4 +1,4 @@
-root="/oscar/data/gdk/hli230/projects/vitac-particle"
+root="/mnt/data/ParticleData/processed/"
 
 
 # scenes=("double_lift_cloth_1" "double_lift_cloth_3" "double_lift_sloth" "double_lift_zebra"
@@ -11,7 +11,7 @@ root="/oscar/data/gdk/hli230/projects/vitac-particle"
 #         "single_push_sloth"
 #         "weird_package")
 
-scenes=("008-pink-cloth")
+scenes=("2025-12-15-163-bear")
 
 exp_name="init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0"
 EP_NUM=10
@@ -24,7 +24,7 @@ for scene_name in "${scenes[@]}"; do
     output_video_dir="${root}/${scene_name}/gaussian_output_video"
     
     for ((ep_idx=0; ep_idx< 1; ep_idx++)); do
-        episode_name=$(printf "episode_%04d" $ep_idx)
+        episode_name=$(printf "episode_%d" $ep_idx)
         echo "Processing episode: $episode_name"
         
         # Training

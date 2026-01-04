@@ -21,7 +21,7 @@ from ..utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
 from ..utils.graphics_utils import BasicPointCloud
 from ..utils.general_utils import strip_symmetric, build_scaling_rotation, get_minimum_axis, flip_align_view
-import sys
+
 try:
     from diff_gaussian_rasterization import SparseGaussianAdam
 except:
@@ -178,7 +178,6 @@ class GaussianModel:
         if self.isotropic:
             scales = torch.log(torch.sqrt(dist2))[...,None]
         else:
-            # scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
             scales = torch.log(torch.sqrt(dist2))[...,None]
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
         rots[:, 0] = 1
@@ -316,23 +315,16 @@ class GaussianModel:
 
         # print all properties in plydata.elements[0]
         scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale")]
-        print(f"scale_names: {scale_names}")
-        # scale_names = sorted(scale_names, key = lambda x: int(x.split('_')[-1]))
         scales = np.zeros((xyz.shape[0], len(scale_names)))
         for idx, attr_name in enumerate(scale_names):
             scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
         
         # Handle case where no scales found - initialize with default values
-        print(f"scales.shape: {scales.shape}")
         if scales.shape[1] == 0:
             print(f"Warning: No scale properties found in PLY file, initializing with default scales")
             # Initialize with small default scale (will be activated by scaling_activation)
             # Use negative value so after exp() activation it becomes small
             scales = np.ones((xyz.shape[0], 1)) * -5.0  # Small scale after activation
-        # elif scales.shape[1] == 1:
-        #     scales = scales.unsqueeze(-1).repeat(1, 3)
-        #     print(f"scales shape: {scales.shape}")
-        #     sys.exit()
         
         # Handle case where there are more than 3 scale dimensions (e.g., 9D scaling)
         # Take only the first 3 dimensions to match expected format
@@ -349,12 +341,6 @@ class GaussianModel:
         for idx, attr_name in enumerate(rot_names):
             rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        # self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
-        # self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        # self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        # self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
-        # self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
-        # self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
         self._xyz = nn.Parameter(torch.tensor(xyz.copy(), dtype=torch.float, device="cuda").requires_grad_(True))
         self._features_dc = nn.Parameter(torch.tensor(features_dc.copy(), dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(torch.tensor(features_extra.copy(), dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))

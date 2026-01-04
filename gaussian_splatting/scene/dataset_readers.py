@@ -78,24 +78,6 @@ def as_mesh(scene_or_mesh):
     return mesh
 
 
-# class CameraInfo(NamedTuple):
-#     uid: int
-#     R: np.array
-#     T: np.array
-#     FovY: np.array
-#     FovX: np.array
-#     depth_params: dict
-#     image_path: str
-#     image_name: str
-#     depth_path: str
-#     width: int
-#     height: int
-#     is_test: bool
-#     image: np.array = None
-#     normal: np.array = None
-#     depth: np.array = None
-#     K: np.array = None
-#     occ_mask: np.array = None
 class CameraInfo(NamedTuple):
     uid: int
     R: np.array
@@ -226,25 +208,15 @@ def readColmapCameras(
 
 def fetchPly(path):
     plydata = PlyData.read(path)
-    vertices = plydata['vertex']
-    print(f"vertices: {vertices}")
-    print(f"vertices['x']: {vertices['x']}")
-    print(f"vertices['y']: {vertices['y']}")
-    print(f"vertices['z']: {vertices['z']}")
-    print(f"vertices['red']: {vertices['red']}")
-    print(f"vertices['green']: {vertices['green']}")
-    print(f"vertices['blue']: {vertices['blue']}")
-    positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
-    print(f"positions: {positions}")
-    colors = np.vstack([vertices['red'], vertices['green'],
-                       vertices['blue']]).T / 255.0
-    print(f"colors: {colors}")
-    if 'nx' in vertices:
-        normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
+    vertices = plydata["vertex"]
+    positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
+    colors = np.vstack([vertices["red"], vertices["green"], vertices["blue"]]).T / 255.0
+    if "nx" in vertices:
+        normals = np.vstack([vertices["nx"], vertices["ny"], vertices["nz"]]).T
     else:
         normals = np.zeros((positions.shape[0], 3))
-    print(f"normals: {normals}")
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
+
 
 def storePly(path, xyz, rgb, normals=None):
     # Define the dtype for the structured array
@@ -917,7 +889,7 @@ def readBRICSCameras(params, images_folder, white_background, start_idx, end_idx
     cam_infos = []
     for idx, param in enumerate(params):
         print(f"reading camera {idx} of {len(params)}")
-        mask_path = os.path.join(images_folder, param["cam_name"], 'mask_refined.zarr')
+        mask_path = os.path.join(images_folder, param["cam_name"], 'mask_refined.h5')
         if not os.path.exists(os.path.join(images_folder, param["cam_name"])):
             print(f"camera {param['cam_name']} not found")
             continue
@@ -956,17 +928,17 @@ def readBRICSCameras(params, images_folder, white_background, start_idx, end_idx
         intr[1, 2] = cy
         dist = np.asarray([param["k1"], param["k2"], param["p1"], param["p2"]])
         
-        for img_idx in range(start_idx, end_idx):
-            image_path = os.path.join(images_folder, param["cam_name"], 'undistorted_refined',str(img_idx).zfill(6) + '.png')
-            if os.path.exists(image_path):
-                image_name = os.path.basename(image_path).split(".")[0]
+        video_path = os.path.join(images_folder, param["cam_name"], 'undistorted.mp4')
+        if os.path.exists(video_path):
+            for img_idx in range(start_idx, end_idx):
+                image_name = f"{img_idx:06d}"
                 image = None
                     
                 num = np.float64(img_idx)
                 den = np.float64(num_frames)
                 time = float(num / den)
                 uid = img_idx
-                cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image, image_path=image_path, 
+                cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image, image_path=video_path, 
                                     image_name=image_name, width=int(width), height=int(height), 
                                     time = time, mask_path = mask_path, time_idx = img_idx, K=intr,
                                     white_background=white_background, view_idx=idx)
@@ -977,7 +949,7 @@ def readBRICSCameras(params, images_folder, white_background, start_idx, end_idx
 def readBricsSceneInfo(path, white_background, eval, extension=".png", start_frame=0, end_frame=20000, num_frames=20000):
     images_folder = path
     filename = 'metric_params_refined_undistorted.txt'
-    params = read_params(os.path.join(images_folder, '..', filename))
+    params = read_params(os.path.join(images_folder, filename))
     
     print(f"filename: {filename}")
     cam0 = params[0]["cam_name"]
