@@ -30,7 +30,7 @@ if __name__ == "__main__":
         "--base_path",
         type=str,
         # default="./data/different_types",
-        default="/users/wfu16/data/users/wfu16/datasets/2025-10-14_julia_umi",
+        default="/oscar/data/gdk/hli230/projects/vitac-particle/processed/008-pink-cloth",
     )
     parser.add_argument(
         "--gaussian_path",
@@ -42,7 +42,7 @@ if __name__ == "__main__":
         type=str,
         default="./data/bg.jpg",
     )
-    parser.add_argument("--case_name", type=str, default="episode_0000")
+    parser.add_argument("--case_name", type=str, default="episode_0")
     parser.add_argument("--n_ctrl_parts", type=int, default=1)
     parser.add_argument(
         "--inv_ctrl", action="store_true", help="invert horizontal control direction"
@@ -55,15 +55,15 @@ if __name__ == "__main__":
     base_path = args.base_path
     case_name = args.case_name
 
-    # if "cloth" in case_name or "package" in case_name:
-    cfg.load_from_yaml("configs/cloth.yaml")
-    # else:
-        # cfg.load_from_yaml("configs/real.yaml")
+    if "cloth" in case_name or "package" in case_name:
+        cfg.load_from_yaml("configs/cloth.yaml")
+    else:
+        cfg.load_from_yaml("configs/real.yaml")
 
     base_dir = f"./temp_experiments/{case_name}"
 
     # Read the first-satage optimized parameters to set the indifferentiable parameters
-    optimal_path = f"./experiments_optimization/{case_name}/optimal_params.pkl"
+    optimal_path = f"{base_path}/experiments_optimization/{case_name}/optimal_params.pkl"
     logger.info(f"Load optimal parameters from: {optimal_path}")
     assert os.path.exists(
         optimal_path
@@ -71,9 +71,9 @@ if __name__ == "__main__":
     with open(optimal_path, "rb") as f:
         optimal_params = pickle.load(f)
     cfg.set_optimal_params(optimal_params)  
-    T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
-                              [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
-                              [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
+    T_marker2world = np.array([[ 9.92500579e-01, -1.22225711e-01,  1.86443478e-03,  1.36186366e-01],
+                              [ 5.43975403e-04, -1.08359291e-02, -9.99941142e-01, -1.88119571e-02],
+                              [ 1.22238720e-01,  9.92443176e-01, -1.06881781e-02,  7.19721945e-02],
                               [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
     # invert the ground transform
     T_world2marker = np.linalg.inv(T_marker2world)
@@ -97,7 +97,7 @@ if __name__ == "__main__":
 
     exp_name = "init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0"
     # gaussians_path = f"{args.gaussian_path}/{case_name}/{exp_name}/point_cloud/iteration_10000/point_cloud.ply"
-    gaussians_path = sorted(glob.glob(f"{base_path}/{case_name}/pcd/unfiltered_frame_014000_time_*.ply"))[0]
+    gaussians_path = sorted(glob.glob(f"{base_path}/{case_name}/pcd_4dgs1111/frame_030000_time_*.ply"))[0]
     # gaussians_path = "base_cloth.ply"
     # gaussians_path = f"{base_path}/{case_name}/start_obj_pcd.ply"
     logger.set_log_file(path=base_dir, name="inference_log")
@@ -109,7 +109,7 @@ if __name__ == "__main__":
     # print(f"ground transform: {ground_transform}")
     # trainer.set_ground_transform(ground_transform)
 
-    best_model_path = glob.glob(f"experiments/{case_name}/train/best_*.pth")[0]
+    best_model_path = glob.glob(f"{base_path}/experiments/{case_name}/train/best_*.pth")[0]
     trainer.interactive_playground(
         best_model_path,
         gaussians_path,

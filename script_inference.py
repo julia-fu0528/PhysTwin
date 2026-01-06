@@ -2,7 +2,7 @@ import glob
 import os
 import json
 
-base_path = "/mnt/data/ParticleData/processed/2025-12-15-163-bear"
+base_path = "/oscar/data/gdk/hli230/projects/vitac-particle/processed/008-pink-cloth"
 REMOVE_CAMS = "brics-odroid-003_cam0,brics-odroid-003_cam1,\
 brics-odroid-004_cam0,\
 brics-odroid-014_cam0,\

@@ -1,5 +1,5 @@
 root="/oscar/data/gdk/hli230/projects/vitac-particle"
-scene_name="043-dog"
+scene_name="008-pink-cloth"
 output_dir="${root}/${scene_name}/gaussian_output_dynamic/episode_0000"
 
 # views=("0" "1" "2")
@@ -23,7 +23,7 @@ python gs_render_dynamics.py \
     --output_dir ${output_dir} \
     --iteration 30000 \
     --name ${scene_name} \
-    --start_frame 55 \
+    --start_frame 76 \
     --end_frame 261 \
     --num_frames 261 \
     --white_background \

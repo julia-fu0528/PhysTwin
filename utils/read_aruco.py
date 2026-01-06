@@ -38,7 +38,7 @@ def compute_marker_to_world_from_multiple_cameras(cam2worlds, cam2markers):
 
 
 # Usage:
-extrs = np.load('/oscar/data/gdk/hli230/projects/vitac-particle/2025-11-17/calibration_optim/extrinsics.npy')  # Shape: (N_cams, 4, 4)
+extrs = np.load('/oscar/data/gdk/hli230/projects/vitac-particle/045-sheep/calibration_refined/extrinsics.npy')  # Shape: (N_cams, 4, 4)
 cameras = [subdir for subdir in os.listdir('/users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco') if "cam" in subdir]
 
 marker2cam_rots  = np.load('/users/wfu16/data/users/wfu16/datasets/2025-10-23_snapshot_julia_aruco/aruco_results/all_rvecs.npy', allow_pickle=True).item()
