@@ -5,7 +5,6 @@ wandb/
 experiments/
 past_exps/
 *.npy
-data/
 .DS_Store
 outcmaes/
 data_collect*
