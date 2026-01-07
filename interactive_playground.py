@@ -63,7 +63,7 @@ if __name__ == "__main__":
     base_dir = f"./temp_experiments/{case_name}"
 
     # Read the first-satage optimized parameters to set the indifferentiable parameters
-    optimal_path = f"./experiments_optimization/{case_name}/optimal_params.pkl"
+    optimal_path = f"{base_path}/experiments_optimization/{case_name}/optimal_params.pkl"
     logger.info(f"Load optimal parameters from: {optimal_path}")
     assert os.path.exists(
         optimal_path
@@ -109,7 +109,7 @@ if __name__ == "__main__":
     # print(f"ground transform: {ground_transform}")
     # trainer.set_ground_transform(ground_transform)
 
-    best_model_path = glob.glob(f"experiments/{case_name}/train/best_*.pth")[0]
+    best_model_path = glob.glob(f"{base_path}/experiments/{case_name}/train/best_*.pth")[0]
     trainer.interactive_playground(
         best_model_path,
         gaussians_path,
