@@ -2751,25 +2751,26 @@ class InvPhyTrainerWarp:
         FovY = focal2fov(focal_length_y, height)
         FovX = focal2fov(focal_length_x, width)
         view = Camera(
-            (width, height),
+            width=width, height=height,
             colmap_id="0000",
             R=R,
             T=T,
             FoVx=FovX,
             FoVy=FovY,
-            depth_params=None,
-            image=None,
-            invdepthmap=None,
+            # depth_params=None,
+            # image=None,
+            # invdepthmap=None,
             image_name="0000",
+            image_path=None,
             uid="0000",
             data_device="cuda",
-            train_test_exp=None,
-            is_test_dataset=None,
-            is_test_view=None,
+            # train_test_exp=None,
+            # is_test_dataset=None,
+            # is_test_view=None,
             K=K,
-            normal=None,
+            # normal=None,
             depth=None,
-            occ_mask=None,
+            # occ_mask=None,
         )
         return view
 
