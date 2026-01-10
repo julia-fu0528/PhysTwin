@@ -29,12 +29,15 @@ if __name__ == "__main__":
     parser.add_argument("--case_name", type=str, required=True)
     parser.add_argument("--train_frame", type=int, required=True)
     parser.add_argument("--remove_cams", type=str, default=None)
+    parser.add_argument("--no-gui", action="store_true", help="Disable GUI visualizations")
     args = parser.parse_args()
 
     base_path = args.base_path
     case_name = args.case_name
     train_frame = args.train_frame
     remove_cams = args.remove_cams
+    if args.no_gui:
+        cfg.no_gui = True
     if remove_cams is not None:
         remove_cams = [c for c in remove_cams.split(',') if c]
         print(f"remove cams: {remove_cams}")

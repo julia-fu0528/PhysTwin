@@ -235,10 +235,11 @@ class OptimizerCMA:
             init_drag_damping,
             init_dashpot_damping,
         ]
-
-        self.error_func(
-            x_init, visualize=True, video_path=f"{cfg.base_dir}/optimizeCMA/init.mp4"
-        )
+        
+        if not cfg.no_gui:
+            self.error_func(
+                x_init, visualize=True, video_path=f"{cfg.base_dir}/optimizeCMA/init.mp4"
+            )
 
         std = 1 / 6
         es = cma.CMAEvolutionStrategy(x_init, std, {"bounds": [0.0, 1.0], "seed": 42})
@@ -265,11 +266,12 @@ class OptimizerCMA:
         final_drag_damping = self.denormalize(optimal_x[10], 0, 20)
         final_dashpot_damping = self.denormalize(optimal_x[11], 0, 200)
 
-        self.error_func(
-            optimal_x,
-            visualize=True,
-            video_path=f"{cfg.base_dir}/optimizeCMA/optimal.mp4",
-        )
+        if not cfg.no_gui:
+            self.error_func(
+                optimal_x,
+                visualize=True,
+                video_path=f"{cfg.base_dir}/optimizeCMA/optimal.mp4",
+            )
 
         optimal_results = {}
         optimal_results["global_spring_Y"] = final_global_spring_Y

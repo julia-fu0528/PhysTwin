@@ -51,6 +51,8 @@ class Config:
         self.overlay_path = None
         self.vis_cam_indices = None  # List of camera indices for grid visualization. None = use all cameras
         self.use_grid_gt = False  # Whether to use grid layout for GT visualization
+        self.visualize = True
+        self.no_gui = False
 
     def to_dict(self):
         # Convert the class to dictionary

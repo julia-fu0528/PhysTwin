@@ -24,6 +24,9 @@ def visualize_pc(
     vis_cam_idx=23,
     return_frames=False,
 ):
+    if cfg.no_gui:
+        logger.info("visualize_pc called but cfg.no_gui=True - skipping")
+        return None
     print(f"visualize: {visualize}, save_video: {save_video}, return_frames: {return_frames}")
     # Check if we're in headless mode (no DISPLAY)
     is_headless = not os.environ.get('DISPLAY') or os.environ.get('DISPLAY') == ''
@@ -368,6 +371,9 @@ def visualize_pc_grid(
     """
     Visualize point cloud from multiple camera views in a grid layout.
     """
+    if cfg.no_gui:
+        logger.info("visualize_pc_grid called but cfg.no_gui=True - skipping")
+        return None
     FPS = cfg.FPS
     width, height = cfg.WH
     

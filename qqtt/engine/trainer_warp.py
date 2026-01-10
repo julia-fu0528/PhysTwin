@@ -345,8 +345,11 @@ class InvPhyTrainerWarp:
 
     def train(self, start_epoch=-1):
         # Render the initial visualization
-        video_path = f"{cfg.base_dir}/train/init.mp4"
-        self.visualize_sim(save_only=True, video_path=video_path, use_all_frames=False)
+        if cfg.no_gui:
+            logger.info("Skipping initial visualization because cfg.no_gui=True")
+        else:
+            video_path = f"{cfg.base_dir}/train/init.mp4"
+            self.visualize_sim(save_only=True, video_path=video_path, use_all_frames=False)
 
         best_loss = None
         best_epoch = None
@@ -437,22 +440,25 @@ class InvPhyTrainerWarp:
             logger.info(f"[Train]: Iteration: {i}, Loss: {total_loss}")
 
             if i % cfg.vis_interval == 0 or i == cfg.iterations - 1:
-                video_path = f"{cfg.base_dir}/train/sim_iter{i}.mp4"
-                self.visualize_sim(save_only=True, video_path=video_path, use_all_frames=False)
-                # Only log video to wandb if the file was actually created (may be skipped in headless mode)
-                if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
-                    wandb.log(
-                        {
-                            "video": wandb.Video(
-                                video_path,
-                                format="mp4",
-                                fps=cfg.FPS,
-                            ),
-                        },
-                        step=i,
-                    )
+                if cfg.no_gui:
+                    logger.info(f"Skipping visualization at iteration {i} because cfg.no_gui=True")
                 else:
-                    logger.info(f"Video file not created (headless mode?), skipping wandb video log for iteration {i}")
+                    video_path = f"{cfg.base_dir}/train/sim_iter{i}.mp4"
+                    self.visualize_sim(save_only=True, video_path=video_path, use_all_frames=False)
+                    # Only log video to wandb if the file was actually created (may be skipped in headless mode)
+                    if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+                        wandb.log(
+                            {
+                                "video": wandb.Video(
+                                    video_path,
+                                    format="mp4",
+                                    fps=cfg.FPS,
+                                ),
+                            },
+                            step=i,
+                        )
+                    else:
+                        logger.info(f"Video file not created (headless mode?), skipping wandb video log for iteration {i}")
                 # Save the parameters
                 cur_model = {
                     "epoch": i,
@@ -528,15 +534,18 @@ class InvPhyTrainerWarp:
             )
 
         # Render the initial visualization
-        video_path = f"{cfg.base_dir}/inference.mp4"
-        save_path = f"{cfg.base_dir}/inference.pkl"
-        self.visualize_sim(
-            save_only=True,
-            video_path=video_path,
-            save_trajectory=True,
-            save_path=save_path,
-            use_all_frames=True,  # Use all frames for testing/inference
-        )
+        if cfg.no_gui:
+            logger.info("Skipping inference visualization because cfg.no_gui=True")
+        else:
+            video_path = f"{cfg.base_dir}/inference.mp4"
+            save_path = f"{cfg.base_dir}/inference.pkl"
+            self.visualize_sim(
+                save_only=True,
+                video_path=video_path,
+                save_trajectory=True,
+                save_path=save_path,
+                use_all_frames=True,  # Use all frames for testing/inference
+            )
 
     def visualize_sim(
         self, save_only=True, video_path=None, save_trajectory=False, save_path=None, use_all_frames=False

@@ -114,6 +114,8 @@ class RealData:
         self.visualize_data(visualize=visualize, save_gt=save_gt, use_grid=self.use_grid, vis_cam_indices=self.vis_cam_indices)
 
     def visualize_data(self, visualize=True, save_gt=True, use_grid=False, vis_cam_indices=None):
+        if cfg.no_gui:
+            return
         if visualize:
             if use_grid:
                 visualize_pc_grid(

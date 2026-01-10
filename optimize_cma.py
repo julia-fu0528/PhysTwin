@@ -36,6 +36,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_iter", type=int, default=20)
     parser.add_argument("--start_iter", type=int, default=0, help="Iteration to start from (for resuming)")
     parser.add_argument("--remove_cams", type=str, default=None)
+    parser.add_argument("--no-gui", action="store_true", help="Disable GUI visualizations")
     args = parser.parse_args()
 
     base_path = args.base_path
@@ -44,6 +45,8 @@ if __name__ == "__main__":
     max_iter = args.max_iter
     start_iter = args.start_iter
     remove_cams = args.remove_cams
+    if args.no_gui:
+        cfg.no_gui = True
     if remove_cams is not None:
         remove_cams = [c for c in remove_cams.split(',') if c]
         print(f"remove cams: {remove_cams}")

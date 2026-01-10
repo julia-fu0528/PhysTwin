@@ -18,6 +18,8 @@ class SimpleData:
         self.visualize_data(visualize=visualize)
 
     def visualize_data(self, visualize=False):
+        if cfg.no_gui:
+            return
         if visualize:
             visualize_pc(
                 self.data,
