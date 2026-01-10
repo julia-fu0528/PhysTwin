@@ -1074,7 +1074,6 @@ class InvPhyTrainerWarp:
         current_pos = gaussians.get_xyz
         current_rot = gaussians.get_rotation     # (N,4) quaternion
         current_opacity = gaussians.get_opacity 
-        gaussians._opacity = current_opacity + 10.0
 
         R_motion = torch.tensor(cfg.T_world2marker[:3, :3], dtype=current_pos.dtype, device=cfg.device)
         t_motion = torch.tensor(cfg.T_world2marker[:3, 3], dtype=current_pos.dtype, device=cfg.device)
@@ -1094,7 +1093,7 @@ class InvPhyTrainerWarp:
         quats_marker = np.roll(quats_marker_scipy, 1, axis=1)
         gaussians._rotation = torch.tensor(quats_marker, dtype=current_rot.dtype, device=current_rot.device)
         current_rot = gaussians.get_rotation
-        use_white_background = True  # set to True for white background
+        use_white_background = False  # Set to False for black background (pre-multiplied alpha)
         bg_color = [1, 1, 1] if use_white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
         view = self._create_gs_view(w2c, intrinsic, height, width)
@@ -1340,19 +1339,15 @@ class InvPhyTrainerWarp:
             frame_timer.start()
 
             image = image.clamp(0, 1)
-            if use_white_background:
-                image_mask = torch.logical_and(
-                    (image != 1.0).any(dim=2), image[:, :, 3] > 100 / 255
-                )
-            else:
-                image_mask = torch.logical_and(
-                    (image != 0.0).any(dim=2), image[:, :, 3] > 100 / 255
-                )
-            image[..., 3].masked_fill_(~image_mask, 0.0)
+            # Use a soft threshold for the shadow mask only
+            image_mask = image[:, :, 3] > 0.05
 
-            alpha = image[..., 3:4]
-            rgb = image[..., :3] * 255
-            frame = alpha * rgb + (1 - alpha) * frame
+            # Increase the opacity of the GS object
+            opacity_factor = 1.2
+            alpha = (image[..., 3:4] * opacity_factor).clamp(0, 1)
+            # Since background is black [0,0,0], the RGB channels are already pre-multiplied
+            rgb_premult = (image[..., :3] * 255 * opacity_factor).clamp(0, 255)
+            frame = rgb_premult + (1 - alpha) * frame
             frame = frame.cpu().numpy()
             image_mask = image_mask.cpu().numpy()
             frame = frame.astype(np.uint8)
@@ -1633,7 +1628,7 @@ class InvPhyTrainerWarp:
         gaussians.isotropic = True
         current_pos = gaussians.get_xyz
         current_rot = gaussians.get_rotation
-        use_white_background = True  # set to True for white background
+        use_white_background = False  # Set to False for black background (pre-multiplied alpha)
         bg_color = [1, 1, 1] if use_white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
         view = self._create_gs_view(w2c, intrinsic, height, width)
@@ -1872,19 +1867,15 @@ class InvPhyTrainerWarp:
             frame_timer.start()
 
             image = image.clamp(0, 1)
-            if use_white_background:
-                image_mask = torch.logical_and(
-                    (image != 1.0).any(dim=2), image[:, :, 3] > 100 / 255
-                )
-            else:
-                image_mask = torch.logical_and(
-                    (image != 0.0).any(dim=2), image[:, :, 3] > 100 / 255
-                )
-            image[..., 3].masked_fill_(~image_mask, 0.0)
+            # Use a soft threshold for the shadow mask only
+            image_mask = image[:, :, 3] > 0.05
 
-            alpha = image[..., 3:4]
-            rgb = image[..., :3] * 255
-            frame = alpha * rgb + (1 - alpha) * frame
+            # Increase the opacity of the GS object
+            opacity_factor = 1.2
+            alpha = (image[..., 3:4] * opacity_factor).clamp(0, 1)
+            # Since background is black [0,0,0], the RGB channels are already pre-multiplied
+            rgb_premult = (image[..., :3] * 255 * opacity_factor).clamp(0, 255)
+            frame = rgb_premult + (1 - alpha) * frame
             frame = frame.cpu().numpy()
             image_mask = image_mask.cpu().numpy()
             frame = frame.astype(np.uint8)
