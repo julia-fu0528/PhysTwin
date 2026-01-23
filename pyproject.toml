@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = ["h5py>=3.15.1,<4", "decord>=0.6.0,<0.7"]
 
 [tool.pixi.workspace]
-channels = ["conda-forge", "pytorch", "nvidia"]
+channels = ["conda-forge", "pytorch", "nvidia", "menpo"]
 platforms = ["linux-64"]
 
 [tool.pixi.system-requirements]
@@ -18,7 +18,7 @@ cuda = "12.0"
 libc = { family = "glibc", version = "2.35" } # Consistent with ubuntu 22.04
 
 [tool.pixi.activation.env]
-TORCH_CUDA_ARCH_LIST = "12.0+PTX"
+TORCH_CUDA_ARCH_LIST = "8.6;8.9+PTX"
 DEBIAN_FRONTEND = "noninteractive"
 QT_DEBUG_PLUGINS = "1"
 QT_QPA_PLATFORM = "xcb"
@@ -43,10 +43,13 @@ xorg-libxrender = "*"
 xorg-libxinerama = "*"
 xorg-libxi = "*"
 pynput = "*"
+glew = "*"
+mesalib = "*"
+glfw3 = "*"
 
 [tool.pixi.pypi-dependencies]
 # Core ML
-torch = { version = ">=2.8.0" }
+torch = { version = "==2.8.0" }
 torchvision = { version = "*" }
 torchaudio = { version = "*" }
 numpy = "==1.26.4"
@@ -105,13 +108,13 @@ install-pytorch3d = { cmd = "bash -c 'if [ ! -d pytorch3d ]; then git clone http
 install-pip-deps = { cmd = "echo 'Pip dependencies assumed installed by environment creation'", description = "Placeholder to ensure ordering" }
 
 # Flash Attention
-install-flash-attn = { cmd = "pip install flash-attn --no-build-isolation", depends-on = ["install-pip-deps"] }
+install-flash-attn = { cmd = "pip install flash-attn --no-build-isolation --no-cache-dir", depends-on = ["install-pip-deps"] }
 
 # gsplat from git
 install-gsplat = { cmd = "pip install git+https://github.com/nerfstudio-project/gsplat.git --no-build-isolation", depends-on = ["install-pip-deps"] }
 
 # All-in-one setup
-setup-custom-packages = { cmd = "echo 'Setting up custom packages...'", depends-on = ["install-grounded-sam2", "install-submodules-rasterization", "install-submodules-simpleknn", "install-pytorch3d", "install-flash-attn", "install-gsplat"] }
+post-install = { cmd = "echo 'Setting up custom packages...'", depends-on = ["install-grounded-sam2", "install-submodules-rasterization", "install-submodules-simpleknn", "install-pytorch3d", "install-flash-attn", "install-gsplat"] }
 
 [tool.uv]
 index-url = "https://download.pytorch.org/whl/cu128"

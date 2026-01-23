@@ -135,7 +135,7 @@ class RealData:
                     self.object_visibilities,
                     self.object_motions_valid,
                     visualize=True,
-                    vis_cam_idx=23,
+                    vis_cam_idx=cfg.main_vis_cam_idx,
                 )
         if save_gt:
             if use_grid:
@@ -159,5 +159,5 @@ class RealData:
                     visualize=False,
                     save_video=True,
                     save_path=f"{self.base_dir}/gt.mp4",
-                    vis_cam_idx=23,
+                    vis_cam_idx=cfg.main_vis_cam_idx,
                 )

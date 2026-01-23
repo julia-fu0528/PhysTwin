@@ -1,5 +1,6 @@
+.pixi/
 brics_log/
-
+hpc_log/
 test.py
 wandb/
 experiments/

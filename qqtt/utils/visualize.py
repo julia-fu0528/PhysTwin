@@ -24,335 +24,211 @@ def visualize_pc(
     vis_cam_idx=23,
     return_frames=False,
 ):
-    if cfg.no_gui:
-        logger.info("visualize_pc called but cfg.no_gui=True - skipping")
+    if cfg.no_gui and not save_video and not return_frames:
+        logger.info("visualize_pc called but cfg.no_gui=True and no output requested - skipping")
         return None
-    print(f"visualize: {visualize}, save_video: {save_video}, return_frames: {return_frames}")
-    # Check if we're in headless mode (no DISPLAY)
-    is_headless = not os.environ.get('DISPLAY') or os.environ.get('DISPLAY') == ''
-    
-    # In headless mode, video saving won't work without OSMesa/OpenGL - disable it automatically
-    if is_headless and save_video and not visualize:
-        logger.warning("Headless mode detected: Video saving disabled (requires OpenGL/OSMesa which is not available).")
-        logger.warning("Set DISPLAY or install OSMesa to enable video saving in headless mode.")
-        save_video = False
-        if save_path:
-            logger.info(f"Video would have been saved to: {save_path}")
-    
-    # Early return if neither visualization nor video saving is requested
-    if not visualize and not save_video and not return_frames:
-        logger.info("visualize_pc called but visualize=False, save_video=False, and return_frames=False - skipping")
-        return None
-    
-    video_readers = {}
-    print(f"calling visualize_pc")
-    # Deprecated function, use visualize_pc instead
+
     FPS = cfg.FPS
     width, height = cfg.WH
-    intrinsic = cfg.intrinsics[vis_cam_idx]
-    w2c = cfg.w2cs[vis_cam_idx]
+    
+    # Ensure camera index is valid
+    if vis_cam_idx >= len(cfg.intrinsics):
+        logger.warning(f"vis_cam_idx {vis_cam_idx} out of bounds. Using 0.")
+        vis_cam_idx = 0
 
-    # Convert the stuffs to numpy if it's tensor
+    # Camera Intrinsics
+    intrinsic_matrix = cfg.intrinsics[vis_cam_idx]
+    fx, fy = intrinsic_matrix[0, 0], intrinsic_matrix[1, 1]
+    cx, cy = intrinsic_matrix[0, 2], intrinsic_matrix[1, 2]
+    
+    # Pyrender Camera
+    camera = pyrender.IntrinsicsCamera(fx=fx, fy=fy, cx=cx, cy=cy, znear=0.01, zfar=100.0)
+    
+    # Camera Pose (Camera to World)
+    # Pyrender camera looks down -Z. 
+    # Provided c2w should be compatible if it was working for Open3D/GL.
+    c2w = cfg.c2ws[vis_cam_idx]
+    # We might need to flip axes depending on conventions, but let's try direct use first akin to Open3D
+    # Open3D: Y down, Z forward? Or standard GL? 
+    # Usually real data c2w is GL style (X right, Y up, -Z look) or CV style (X right, Y down, Z look).
+    # Pyrender expects GL style camera. 
+    # If c2ws come from OpenCV calibration, they are likely CV style.
+    # To convert CV (Y down, Z forward) to GL (Y up, -Z forward), rotate 180 deg around X.
+    # Let's assume CV style input and convert to GL for Pyrender.
+    
+    # Data conversion
     if isinstance(object_points, torch.Tensor):
         object_points = object_points.cpu().numpy()
     if isinstance(object_colors, torch.Tensor):
         object_colors = object_colors.cpu().numpy()
     if isinstance(object_visibilities, torch.Tensor):
         object_visibilities = object_visibilities.cpu().numpy()
-    if isinstance(object_motions_valid, torch.Tensor):
-        object_motions_valid = object_motions_valid.cpu().numpy()
     if isinstance(controller_points, torch.Tensor):
         controller_points = controller_points.cpu().numpy()
 
+    # Default colors
     if object_colors is None:
-        object_colors = np.tile(
-            [1, 0, 0], (object_points.shape[0], object_points.shape[1], 1)
-        )
-    else:
-        if object_colors.shape[1] < object_points.shape[1]:
-            # If the object_colors is not the same as object_points, fill the colors with black
-            object_colors = np.concatenate(
-                [
-                    object_colors,
-                    np.ones(
-                        (
-                            object_colors.shape[0],
-                            object_points.shape[1] - object_colors.shape[1],
-                            3,
-                        )
-                    )
-                    * 0.3,
-                ],
-                axis=1,
-            )
-
-    # The pcs is a 4d pcd numpy array with shape (n_frames, n_points, 3)
-    vis = o3d.visualization.Visualizer()
-    window_created = False
-    headless_mode = False
+        object_colors = np.tile([1, 0, 0], (object_points.shape[0], object_points.shape[1], 1))
     
-    try:
-        vis.create_window(visible=visualize, width=width, height=height)
-        print(f"Creating window with visible: {visualize}, width: {width}, height: {height}")
-        window_created = True
-    except Exception as e:
-        if not visualize and save_video:
-            # In headless mode, try to create window for offscreen rendering
-            print(f"Failed to create visible window: {e}. Attempting headless rendering...")
-            logger.warning(f"Failed to create visible window: {e}. Attempting headless rendering...")
-            try:
-                vis.create_window(visible=False, width=width, height=height)
-                print(f"Successfully created headless window")
-                window_created = True
-                headless_mode = True
-            except Exception as e2:
-                logger.error(f"Failed to create headless window: {e2}. Cannot proceed with visualization.")
-                print(f"Failed to create headless window: {e2}. Cannot proceed with visualization.")
-                if save_video:
-                    logger.warning("Video saving disabled in headless mode (no OpenGL/OSMesa available)")
-                return None
-        else:
-            logger.error(f"Failed to create window: {e}")
-            print(f"Failed to create window: {e}")
-            return None
+    # Pyrender Renderer
+    r = pyrender.OffscreenRenderer(viewport_width=width, viewport_height=height)
     
-    # Note: We've already disabled save_video in headless mode above, so no need to test capture here
-    # vis.create_window(visible=visualize and not return_frames, width=width, height=height)
-    # === Add Ground Plane at z=0 ===
-    plane_color = [0.5, 0.5, 0.5]  # light gray
-    plane_x = np.arange(-0.8, 0.8, 0.01)
-    plane_y = np.arange(-0.8, 0.8, 0.01)
-    plane_points = np.array([[x, y, 0] for x in plane_x for y in plane_y])
-
-    ground_plane = o3d.geometry.PointCloud()
-    ground_plane.points = o3d.utility.Vector3dVector(plane_points)
-    ground_plane.colors = o3d.utility.Vector3dVector(np.tile(plane_color, (plane_points.shape[0], 1)))
-
-    # vis.add_geometry(ground_plane)
-    # T_marker2world = np.linalg.inv(cfg.T_world2marker)
-    # T_marker2world = np.array([[ 9.92457290e-01, -1.22580045e-01,  1.63125912e-03,  3.31059452e-01],
-    #                           [ 2.70205336e-04, -1.11191912e-02, -9.99938143e-01,  1.90897759e-01],
-    #                           [ 1.22590601e-01,  9.92396340e-01, -1.10022006e-02,  2.75183546e-01],
-    #                           [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
-    # origin = T_marker2world[:3, 3]
-    # axis_len = 1
-    # x_end = origin + T_marker2world[:3, 0] * axis_len
-    # y_end = origin + T_marker2world[:3, 1] * axis_len
-    # z_end = origin + T_marker2world[:3, 2] * axis_len
-    # x_axis = o3d.geometry.LineSet(
-    #     points=o3d.utility.Vector3dVector([origin, x_end]),
-    #     lines=o3d.utility.Vector2iVector([[0, 1]]),
-    # )
-    # x_axis.paint_uniform_color([1, 0, 0])
-    # vis.add_geometry(x_axis)
-    # y_axis = o3d.geometry.LineSet(
-    #     points=o3d.utility.Vector3dVector([origin, y_end]),
-    #     lines=o3d.utility.Vector2iVector([[0, 1]]),
-    # )
-    # y_axis.paint_uniform_color([0, 1, 0])
-    # vis.add_geometry(y_axis)
-    # z_axis = o3d.geometry.LineSet(
-    #     points=o3d.utility.Vector3dVector([origin, z_end]),
-    #     lines=o3d.utility.Vector2iVector([[0, 1]]),
-    # )
-    # z_axis.paint_uniform_color([0, 0, 1])
-    # vis.add_geometry(z_axis)
-
-    # if save_video and visualize:
-    #     raise ValueError("Cannot save video and visualize at the same time.")
-    # Initialize video writer if save_video is True
+    # Video Writer
+    video_writer = None
     if save_video:
         if save_path is None:
-            logger.error("save_video=True but save_path is None. Cannot save video.")
+            logger.error("save_video=True but save_path is None")
             return None
-        # Ensure the directory exists
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         temp_save_path = save_path.replace(".mp4", "_temp.mp4")
-        logger.info(f"Saving temporary video to: {temp_save_path}")
-        # fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         video_writer = cv2.VideoWriter(temp_save_path, fourcc, FPS, (width, height))
-        if not video_writer.isOpened():
-            print(f"Failed to open video writer for {temp_save_path}")
-            logger.error(f"Failed to open video writer for {temp_save_path}")
-            return None
-        # video_writer = cv2.VideoWriter(save_path, fourcc, FPS, (width, height))
-    # Initialize frames list if return_frames is True
-    if return_frames:
-        frames = []
+        logger.info(f"Saving video to {temp_save_path}")
 
-    logger.info(f"Starting visualization loop: {object_points.shape[0]} frames, save_video={save_video}, visualize={visualize}")
-    if controller_points is not None:
-        controller_meshes = []
-        prev_center = []
-
-    # Get all cameras sorted to ensure consistent indexing
+    frames = [] if return_frames else None
+    
+    # Pre-load overlay / undistorted video reader if needed
+    overlay_reader = None
+    target_camera_name = None
     if cfg.overlay_path is not None:
-        all_cameras = sorted([subdir for subdir in os.listdir(cfg.overlay_path) if "cam" in subdir])
-        if vis_cam_idx < len(all_cameras):
-            target_camera = all_cameras[vis_cam_idx]
-        else:
-            logger.warning(f"vis_cam_idx {vis_cam_idx} is out of bounds for cameras in {cfg.overlay_path}")
-            target_camera = None
-    else:
-        target_camera = None
+         all_cameras = sorted([subdir for subdir in os.listdir(cfg.overlay_path) if "cam" in subdir])
+         if vis_cam_idx < len(all_cameras):
+             target_camera_name = all_cameras[vis_cam_idx]
+             video_path = f"{cfg.overlay_path}/{target_camera_name}/undistorted.mp4"
+             if os.path.exists(video_path):
+                 overlay_reader = decord.VideoReader(video_path, ctx=decord.cpu(0))
 
-    for i in range(object_points.shape[0]):
-        object_pcd = o3d.geometry.PointCloud()
-        if object_visibilities is None:
-            object_pcd.points = o3d.utility.Vector3dVector(object_points[i])
-            object_pcd.colors = o3d.utility.Vector3dVector(object_colors[i])
-        else:
-            object_pcd.points = o3d.utility.Vector3dVector(
-                object_points[i, np.where(object_visibilities[i])[0], :]
-            )
-            object_pcd.colors = o3d.utility.Vector3dVector(
-                object_colors[i, np.where(object_visibilities[i])[0], :]
-            )
-        if i == 0:
-            render_object_pcd = object_pcd
-            vis.add_geometry(render_object_pcd)
-            if controller_points is not None:
-                # Use sphere mesh for each controller point
-                for j in range(controller_points.shape[1]):
-                    origin = controller_points[i, j]
-                    origin_color = [1, 0, 0]
-                    controller_mesh = o3d.geometry.TriangleMesh.create_sphere(
-                        radius=0.01
-                    ).translate(origin)
-                    controller_mesh.compute_vertex_normals()
-                    controller_mesh.paint_uniform_color(origin_color)
-                    controller_meshes.append(controller_mesh)
-                    vis.add_geometry(controller_meshes[-1])
-                    prev_center.append(origin)
-            # Adjust the viewpoint - only needed if we're actually rendering
-            # Skip if we're just saving video in headless mode and view_control isn't available
-            view_control = vis.get_view_control()
-            if view_control is not None:
-                try:
-                    camera_params = o3d.camera.PinholeCameraParameters()
-                    intrinsic_parameter = o3d.camera.PinholeCameraIntrinsic(
-                        width, height, intrinsic
-                    )
-                    camera_params.intrinsic = intrinsic_parameter
-                    camera_params.extrinsic = w2c
-                    view_control.convert_from_pinhole_camera_parameters(
-                        camera_params, allow_arbitrary=True
-                    )
-                    print(f"Successfully set camera parameters")
-                except Exception as e:
-                    logger.warning(f"Failed to set camera parameters: {e}. Continuing without camera setup.")
-                    print(f"Failed to set camera parameters: {e}. Continuing without camera setup.")
-            else:
-                # Headless mode - view control not available, skip camera setup
-                # This is OK if we're just saving video - Open3D will use default view
-                print(f"view_control is None")
-                if save_video:
-                    logger.info("View control not available (headless mode), using default camera view for video")
-                    print(f"View control not available (headless mode), using default camera view for video")
-                else:
-                    logger.info("View control not available (headless mode), skipping camera setup")
-        else:
-            render_object_pcd.points = o3d.utility.Vector3dVector(object_pcd.points)
-            render_object_pcd.colors = o3d.utility.Vector3dVector(object_pcd.colors)
-            vis.update_geometry(render_object_pcd)
-            if controller_points is not None:
-                for j in range(controller_points.shape[1]):
-                    origin = controller_points[i, j]
-                    controller_meshes[j].translate(origin - prev_center[j])
-                    vis.update_geometry(controller_meshes[j])
-                    prev_center[j] = origin
-        try:
-            vis.poll_events()
-            vis.update_renderer()
-        except Exception as e:
-            if not visualize:
-                # In headless mode, these might fail - log and continue
-                logger.warning(f"Failed to poll events/update renderer (headless mode?): {e}")
-            else:
-                raise
-
-        # Capture frame and write to video file if save_video is True, or collect if return_frames
-        if save_video or return_frames:
-            try:
-                if headless_mode and i == 0:
-                    logger.warning("Attempting frame capture in headless mode - this may hang if OpenGL is not available")
-                frame = np.asarray(vis.capture_screen_float_buffer(do_render=True))
-                if i == 0 and save_video:
-                    logger.info(f"Successfully captured first frame (shape: {frame.shape})")
-            except Exception as e:
-                logger.error(f"Failed to capture screen buffer at frame {i}: {e}")
-                if save_video:
-                    logger.error("Video saving failed - likely due to headless mode without OpenGL/OSMesa support")
-                    video_writer.release()
-                return None if not return_frames else []
-            frame = (frame * 255).astype(np.uint8)
-            if cfg.overlay_path is not None and target_camera is not None:
-                frame_num = cfg.start_frame + i
-                mask = np.all(frame == [255, 255, 255], axis=-1)
-                
-                video_path = f"{cfg.overlay_path}/{target_camera}/undistorted.mp4"
-                if os.path.exists(video_path):
-                    if video_path not in video_readers:
-                        video_readers[video_path] = decord.VideoReader(video_path, ctx=decord.cpu(0))
-                    reader = video_readers[video_path]
-                    overlay = reader[frame_num].asnumpy()
-                    frame[mask] = overlay[mask]  # Replace background
-                else:
-                    image_path = f"{cfg.overlay_path}/{target_camera}/undistorted_refined/{frame_num:06d}.png"
-                    overlay = cv2.imread(image_path)
-                    if overlay is not None:
-                        overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-                        frame[mask] = overlay[mask]  # Replace background
-            if save_video:
-                # Convert RGB to BGR for video writer
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                success = video_writer.write(frame_bgr)
-                if i == 0:
-                    logger.info(f"Writing first frame to video: {success}")
-                if i % 10 == 0:
-                    logger.debug(f"Written {i+1}/{object_points.shape[0]} frames to video")
-            if return_frames:
-                # Keep RGB format for frames list
-                frames.append(frame)
-
-        if visualize:
-            time.sleep(1 / FPS)
-
+    logger.info(f"Starting Pyrender loop: {object_points.shape[0]} frames")
+    from tqdm import tqdm
+    
+    # Create light
+    light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=3.0)
+    
+    # Create conversion matrix from CV to GL if needed (Rotate 180 around X)
+    # CV: x-right, y-down, z-forward
+    # GL: x-right, y-up, z-back
+    cv_to_gl = np.array([[1, 0, 0, 0], 
+                         [0, -1, 0, 0], 
+                         [0, 0, -1, 0], 
+                         [0, 0, 0, 1]])
+    
+    camera_pose = c2w @ cv_to_gl
+    
+    # Pre-compute controller sphere mesh
+    controller_mesh = None
+    if controller_points is not None:
+        sm = trimesh.creation.icosphere(radius=0.01)
+        # Create pyrender mesh once
+        controller_mesh = pyrender.Mesh.from_trimesh(sm, poses=np.eye(4))
+        # Simple red material
+        red_material = pyrender.MetallicRoughnessMaterial(
+            baseColorFactor=[1.0, 0.0, 0.0, 1.0],
+            metallicFactor=0.0,
+            roughnessFactor=0.5
+        )
+        for prim in controller_mesh.primitives:
+             prim.material = red_material
+    
+    # Test render once to ensure it works before loop
     try:
-        vis.destroy_window()
+        print("Testing single frame render...")
+        test_scene = pyrender.Scene(bg_color=[1.0, 1.0, 1.0])
+        test_scene.add(camera, pose=camera_pose)
+        test_scene.add(light, pose=camera_pose)
+        r.render(test_scene)
+        print("Test render successful.")
     except Exception as e:
-        logger.warning(f"Failed to destroy window: {e}")
-    if save_video:
-        print(f"Releasing video writer")
+        logger.error(f"Test render failed: {e}")
+        return None
+
+    for i in tqdm(range(object_points.shape[0]), desc="Rendering frames"):
+        scene = pyrender.Scene(bg_color=[1.0, 1.0, 1.0]) # White background for easy masking
+        
+        # Add Camera
+        scene.add(camera, pose=camera_pose)
+        
+        # Add Light (attached to camera or fixed?) -> Fixed in simple scene or attached to camera
+        scene.add(light, pose=camera_pose)
+        
+        # Add Object Points
+        curr_points = object_points[i]
+        curr_colors = object_colors[i]
+        
+        if object_visibilities is not None:
+             vis_mask = np.where(object_visibilities[i])[0]
+             curr_points = curr_points[vis_mask]
+             curr_colors = curr_colors[vis_mask]
+             
+        # Pyrender doesn't support PointCloud directly as a specialized primitive with size, 
+        # but Mesh with POINTS mode works. 
+        m = pyrender.Mesh.from_points(curr_points, colors=curr_colors)
+        scene.add(m)
+        
+        # Add Controller Points (Spheres)
+        if controller_points is not None and controller_mesh is not None:
+            for j in range(controller_points.shape[1]):
+                cp_pos = controller_points[i, j]
+                # Set pose 
+                pose = np.eye(4)
+                pose[:3, 3] = cp_pos
+                scene.add(controller_mesh, pose=pose)
+
+        # Render
+        color, depth = r.render(scene)
+        
+        # Color is RGB
+        frame = color.copy()
+        
+        # Overlay Logic
+        if target_camera_name is not None:
+            frame_num = cfg.start_frame + i
+            # Create mask where background is white
+            # Tolerance might be needed due to lighting/shading? 
+            # If bg_color is exactly [1,1,1] and lighting doesn't affect background (it shouldn't in pyrender unless there's geometry)
+            mask = np.all(frame >= [250, 250, 250], axis=-1)
+            
+            overlay_img = None
+            if overlay_reader is not None and frame_num < len(overlay_reader):
+                overlay_img = overlay_reader[frame_num].asnumpy()
+            else:
+                 # Check individual files
+                 image_path = f"{cfg.overlay_path}/{target_camera_name}/undistorted_refined/{frame_num:06d}.png"
+                 if os.path.exists(image_path):
+                     overlay_img_bgr = cv2.imread(image_path)
+                     if overlay_img_bgr is not None:
+                         overlay_img = cv2.cvtColor(overlay_img_bgr, cv2.COLOR_BGR2RGB)
+            
+            if overlay_img is not None:
+                 if overlay_img.shape[:2] != (height, width):
+                      overlay_img = cv2.resize(overlay_img, (width, height))
+                 frame[mask] = overlay_img[mask]
+        
+        # Save/Store
+        if video_writer:
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            video_writer.write(frame_bgr)
+            
+        if return_frames:
+            frames.append(frame)
+
+    # Cleanup
+    r.delete()
+    if video_writer:
         video_writer.release()
-        
-        # Convert codec using ffmpeg
-        temp_save_path = save_path.replace(".mp4", "_temp.mp4")
-        if os.path.exists(temp_save_path):
-            logger.info(f"Converting video codec: {temp_save_path} -> {save_path}")
-            try:
-                subprocess.run([
-                    "ffmpeg", "-y",
-                    "-i", str(temp_save_path),
-                    "-c:v", "libx264",
-                    "-pix_fmt", "yuv420p",
-                    "-crf", "23",
-                    str(save_path)
-                ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                os.remove(temp_save_path)
-                logger.info(f"Video converted and saved successfully: {save_path}")
-            except subprocess.CalledProcessError as e:
-                logger.error(f"FFmpeg conversion failed: {e}")
-                # Fallback: rename temp to final if conversion failed
-                os.rename(temp_save_path, save_path)
-                logger.warning(f"Fallback: Saved unconverted video to {save_path}")
-        
-        if os.path.exists(save_path):
-            file_size = os.path.getsize(save_path)
-            logger.info(f"Final video size: {file_size / 1024 / 1024:.2f} MB")
-        else:
-            logger.error(f"Video file was not created: {save_path}")
+        # FFmpeg conversion (same as before)
+        if save_path:
+             try:
+                 subprocess.run([
+                     "ffmpeg", "-y", "-i", temp_save_path, 
+                     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", 
+                     save_path
+                 ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                 os.remove(temp_save_path)
+                 logger.info(f"Video saved to {save_path}")
+             except Exception as e:
+                 logger.error(f"FFmpeg failed: {e}")
+                 os.rename(temp_save_path, save_path)
+    
     if return_frames:
         return frames
 

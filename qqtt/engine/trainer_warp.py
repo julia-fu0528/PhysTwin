@@ -597,7 +597,7 @@ class InvPhyTrainerWarp:
                 self.controller_points,
                 visualize=True,
                 save_video=True,
-                vis_cam_idx=23,
+                vis_cam_idx=cfg.main_vis_cam_idx,
             )
         else:
             assert video_path is not None, "Please provide the video path to save"
@@ -608,7 +608,7 @@ class InvPhyTrainerWarp:
                 visualize=True,
                 save_video=True,
                 save_path=video_path,
-                vis_cam_idx=23,
+                vis_cam_idx=cfg.main_vis_cam_idx,
             )
 
     def on_press(self, key):

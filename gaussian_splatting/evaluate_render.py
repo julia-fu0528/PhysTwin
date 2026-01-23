@@ -1,230 +1,600 @@
+"""
+Evaluate Rendering Metrics (PSNR, SSIM, LPIPS) with proper:
+1. Frame alignment using split.json
+2. GT masking using mask_refined.h5
+3. Prediction rendering using 3DGS + LBS deformation
+4. Prediction masking using mask_refined.h5
+"""
+
 import os
-from PIL import Image
-from utils.loss_utils import ssim
-from lpipsPyTorch import lpips
-from utils.image_utils import psnr
+# Set environment variables for headless rendering
+os.environ["PYOPENGL_PLATFORM"] = "egl"
+os.environ["EGL_PLATFORM"] = "surfaceless"
+
+import sys
+import argparse
+import glob
 import json
-from tqdm import tqdm
+import cv2
+import csv
 import torch
-# import torchvision.transforms.functional as tf
-import torchvision.transforms as transforms
+import wandb
 import numpy as np
+import subprocess
+import pickle
+import h5py
+import copy
+from tqdm import tqdm
+from scipy.spatial.transform import Rotation as R
+
+# Add PhysTwin root to path for imports
+# This script should be run from PhysTwin root or with PYTHONPATH set
+_this_dir = os.path.dirname(os.path.abspath(__file__))
+_root_dir = os.path.dirname(_this_dir)
+sys.path.insert(0, _root_dir)
+sys.path.insert(0, _this_dir)
+
+# Import from gaussian_splatting submodules (using absolute paths from root)
+from gaussian_splatting.utils.loss_utils import ssim
+from gaussian_splatting.lpipsPyTorch import lpips
+from gaussian_splatting.utils.image_utils import psnr
+from gaussian_splatting.scene.gaussian_model import GaussianModel
+from gaussian_splatting.scene.cameras import Camera
+from gaussian_splatting.gaussian_renderer import render
+from gaussian_splatting.dynamic_utils import (
+    get_topk_indices, knn_weights_sparse, interpolate_motions_speedup, calc_weights_vals_from_indices
+)
+from gaussian_splatting.utils.graphics_utils import focal2fov, getWorld2View2, getProjectionMatrix
+
+# Import from root-level modules
+from gs_render import remove_gaussians_with_low_opacity
 
 
 def img2tensor(img):
-    img = np.array(img, dtype=np.float32) / 255.0  # Normalize to [0,1]
-    img = img.transpose(2, 0, 1)  # Change shape from (H, W, C) to (C, H, W)
+    """Convert numpy image (H, W, C) to tensor (1, C, H, W) on GPU."""
+    img = np.array(img, dtype=np.float32) / 255.0
+    img = img.transpose(2, 0, 1)
     return torch.from_numpy(img).unsqueeze(0).cuda()
 
 
-def compute_iou(mask1, mask2):
-    intersection = np.logical_and(mask1, mask2).sum()
-    union = np.logical_or(mask1, mask2).sum()
-    return intersection / union if union > 0 else 1.0
+def read_video_frame(cap, frame_idx):
+    """Read a specific frame from a video capture object."""
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    ret, frame = cap.read()
+    if ret:
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        return frame
+    return None
+
+
+def load_mask_h5(mask_path, frame_idx):
+    """Load a single frame mask from H5 file."""
+    try:
+        with h5py.File(mask_path, 'r') as f:
+            mask = f['data'][frame_idx]
+            # Normalize to 0-255 if needed
+            if mask.max() <= 1.0:
+                mask = (mask * 255).astype(np.uint8)
+            else:
+                mask = mask.astype(np.uint8)
+            return mask
+    except Exception as e:
+        print(f"Error loading mask: {e}")
+        return None
+
+
+def apply_mask_to_frame(frame, mask):
+    """Apply binary mask to frame (set background to black)."""
+    if mask is None:
+        return frame
+    masked_frame = frame.copy()
+    # Expand mask to 3 channels if needed
+    if len(mask.shape) == 2:
+        mask_3ch = np.stack([mask, mask, mask], axis=-1)
+    else:
+        mask_3ch = mask
+    # Set background (mask == 0) to black
+    masked_frame[mask_3ch == 0] = 0
+    return masked_frame
+
+
+def create_camera_view(w2c, intrinsic, height, width, cam_id=0):
+    """Create a camera view object for Gaussian rendering."""
+    R = np.transpose(w2c[:3, :3])  # R is stored transposed for CUDA
+    T = w2c[:3, 3]
+    
+    FovY = focal2fov(intrinsic[1, 1], height)
+    FovX = focal2fov(intrinsic[0, 0], width)
+    
+    view = Camera(
+        colmap_id=cam_id,
+        R=R,
+        T=T,
+        FoVx=FovX,
+        FoVy=FovY,
+        image_path="",
+        image_name=f"eval_{cam_id}",
+        uid=cam_id,
+        K=intrinsic,
+        width=width,
+        height=height,
+    )
+    return view
+
+
+def render_gaussians_lbs(gaussians, ctrl_pts, view, background, n_frames):
+    """
+    Render Gaussians with LBS deformation based on control point trajectories.
+    Uses chunked processing to avoid OOM.
+    
+    Args:
+        gaussians: GaussianModel with initial state
+        ctrl_pts: (n_frames, n_ctrl_pts, 3) tensor of control point positions
+        view: Camera view for rendering
+        background: Background color tensor
+        n_frames: Number of frames to render
+    
+    Returns:
+        List of rendered frames (H, W, 3) as numpy arrays
+    """
+    rendered_frames = []
+    
+    # Get initial Gaussian state
+    xyz_0 = gaussians.get_xyz.clone()
+    quat_0 = gaussians.get_rotation.clone()
+    
+    # Current state (will be updated each frame)
+    current_pos = xyz_0.clone()
+    current_rot = quat_0.clone()
+    
+    # Initialize LBS relations (computed once from first control points)
+    init_particle_pos = ctrl_pts[0]
+    relations = get_topk_indices(init_particle_pos, K=16)
+    
+    # Chunk size for processing to avoid OOM (same as gs_render_dynamics.py)
+    chunk_size = 20_000
+    n_gaussians = len(current_pos)
+    num_chunks = (n_gaussians + chunk_size - 1) // chunk_size
+    
+    for frame_idx in tqdm(range(n_frames), desc="Rendering with LBS"):
+        if frame_idx > 0:
+            # Apply LBS deformation in chunks
+            prev_particle_pos = ctrl_pts[frame_idx - 1]
+            cur_particle_pos = ctrl_pts[frame_idx]
+            
+            for j in range(num_chunks):
+                start = j * chunk_size
+                end = min((j + 1) * chunk_size, n_gaussians)
+                
+                pos_chunk = current_pos[start:end].clone()
+                rot_chunk = current_rot[start:end].clone()
+                
+                # Compute KNN weights for this chunk (sparse version - computed once per chunk)
+                if frame_idx == 1:
+                    # Compute weight indices once from initial positions
+                    pass  # Will compute below
+                
+                # Use sparse weights for memory efficiency
+                weights, weights_indices = knn_weights_sparse(prev_particle_pos, pos_chunk, K=16)
+                
+                # Interpolate motions for this chunk using speedup version
+                new_pos, new_rot, _ = interpolate_motions_speedup(
+                    bones=prev_particle_pos,
+                    motions=cur_particle_pos - prev_particle_pos,
+                    relations=relations,
+                    weights=weights,
+                    weights_indices=weights_indices,
+                    xyz=pos_chunk,
+                    quat=rot_chunk,
+                )
+                
+                current_pos[start:end] = new_pos
+                current_rot[start:end] = new_rot
+                
+                # Clean up intermediate tensors
+                del weights, weights_indices, pos_chunk, rot_chunk, new_pos, new_rot
+        
+        # Update Gaussian positions
+        gaussians._xyz = current_pos
+        gaussians._rotation = current_rot
+        
+        # Render
+        with torch.no_grad():
+            results = render(view, gaussians, None, background)
+            rendering = results["render"]  # (3, H, W) or (4, H, W)
+            
+            # Convert to numpy immediately to free GPU memory
+            if rendering.shape[0] == 4:
+                image = rendering[:3].permute(1, 2, 0).cpu().numpy()
+            else:
+                image = rendering.permute(1, 2, 0).cpu().numpy()
+            
+            image = (image.clip(0, 1) * 255).astype(np.uint8)
+            rendered_frames.append(image)
+            
+            # Clean up render results
+            del results, rendering
+        
+        # Periodically clear GPU cache
+        if frame_idx % 10 == 0:
+            torch.cuda.empty_cache()
+    
+    return rendered_frames
+
+
+def save_comparison_video(gt_frames, pred_frames, output_path, fps=30):
+    """Save side-by-side comparison video with ffmpeg transcoding."""
+    if len(gt_frames) == 0:
+        return
+    h, w, _ = gt_frames[0].shape
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (w * 2, h))
+    
+    for gt, pred in zip(gt_frames, pred_frames):
+        if pred.shape != gt.shape:
+            pred = cv2.resize(pred, (w, h))
+        
+        gt_bgr = cv2.cvtColor(gt, cv2.COLOR_RGB2BGR)
+        pred_bgr = cv2.cvtColor(pred, cv2.COLOR_RGB2BGR)
+        
+        cv2.putText(gt_bgr, "Ground Truth", (w // 20, h // 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(pred_bgr, "Prediction", (w // 20, h // 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        
+        combined = np.hstack((gt_bgr, pred_bgr))
+        out.write(combined)
+    out.release()
+    
+    # Transcode with ffmpeg
+    final_output = output_path
+    temp_output = output_path.replace(".mp4", "_temp.mp4")
+    os.rename(output_path, temp_output)
+    
+    cmd = [
+        "ffmpeg", "-y", "-i", temp_output,
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23",
+        final_output
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.remove(temp_output)
+        print(f"Saved comparison video to {final_output}")
+    except Exception as e:
+        print(f"Failed to transcode: {e}")
+        os.rename(temp_output, final_output)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate Rendering Metrics (PSNR, SSIM, LPIPS)")
+    parser.add_argument("--base_path", type=str, required=True, 
+                        help="Path to ground truth data")
+    parser.add_argument("--prediction_dir", type=str, required=True, 
+                        help="Path to experiment outputs")
+    parser.add_argument("--output_file", type=str, default="results/render_results.csv", 
+                        help="Path to output CSV file")
+    parser.add_argument("--cam_idx", type=int, default=0,
+                        help="Camera index to use for evaluation (default: 0, first camera)")
+    parser.add_argument("--skip_render", action="store_true",
+                        help="Skip LBS rendering and use pre-rendered inference.mp4")
+    parser.add_argument("--ep_idx", type=int, default=None,
+                        help="Specific episode index to evaluate")
+    return parser.parse_args()
+
+
+def calculate_metrics(gt_frames, pred_frames):
+    """Calculate PSNR, SSIM, LPIPS metrics between GT and predicted frames."""
+    if len(gt_frames) != len(pred_frames):
+        print(f"Warning: Frame count mismatch: {len(gt_frames)} vs {len(pred_frames)}")
+        min_len = min(len(gt_frames), len(pred_frames))
+        gt_frames = gt_frames[:min_len]
+        pred_frames = pred_frames[:min_len]
+    
+    if len(gt_frames) == 0:
+        return {"psnr": 0, "ssim": 0, "lpips": 0, "count": 0}
+    
+    psnrs, ssims, lpipss = [], [], []
+    
+    for i in range(len(gt_frames)):
+        gt = gt_frames[i]
+        pred = pred_frames[i]
+        
+        gt_tensor = img2tensor(gt)
+        if gt.shape != pred.shape:
+            pred = cv2.resize(pred, (gt.shape[1], gt.shape[0]))
+        pred_tensor = img2tensor(pred)
+        
+        psnrs.append(psnr(pred_tensor, gt_tensor).item())
+        ssims.append(ssim(pred_tensor, gt_tensor).item())
+        lpipss.append(lpips(pred_tensor, gt_tensor, net_type='vgg').item())
+    
+    return {
+        "psnr": np.mean(psnrs),
+        "ssim": np.mean(ssims),
+        "lpips": np.mean(lpipss),
+        "count": len(psnrs)
+    }
+
+
+def main():
+    args = parse_args()
+    base_path = args.base_path
+    prediction_dir = args.prediction_dir
+    output_file = args.output_file
+    
+    if args.ep_idx is not None and output_file == "results/render_results.csv":
+        output_file = f"results/episode_{args.ep_idx}_render.csv"
+
+    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+    
+    with open(output_file, mode="w", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        writer.writerow([
+            "Case Name",
+            "Train PSNR", "Train SSIM", "Train LPIPS",
+            "Test PSNR", "Test SSIM", "Test LPIPS"
+        ])
+        
+        if args.ep_idx is not None:
+            case_name = f"episode_{args.ep_idx}"
+            episodes = [os.path.join(prediction_dir, case_name)]
+        else:
+            episodes = sorted(glob.glob(f"{prediction_dir}/episode_*"))
+        
+        for ep_dir in episodes:
+            case_name = os.path.basename(ep_dir)
+            print(f"\n{'='*60}")
+            print(f"Processing {case_name}")
+            print(f"{'='*60}")
+            
+            # ===== Load Split =====
+            split_path = f"{base_path}/{case_name}/split.json"
+            if not os.path.exists(split_path):
+                print(f"Split file not found: {split_path}")
+                continue
+            
+            with open(split_path, 'r') as f:
+                split_data = json.load(f)
+            
+            train_range = split_data.get("train", [0, 0])
+            test_range = split_data.get("test", [0, 0])
+            offset = train_range[0]  # Start frame of contact interval
+            n_frames = split_data.get("frame_len", test_range[1] - offset)
+            
+            print(f"Split: train={train_range}, test={test_range}, offset={offset}, n_frames={n_frames}")
+            
+            # ===== Find Camera Folder =====
+            cam_folders = sorted(glob.glob(f"{base_path}/{case_name}/*cam*"))
+            if not cam_folders:
+                print(f"No camera folders found for {case_name}")
+                continue
+            
+            # Select camera (default: first one or specified index)
+            cam_idx = min(args.cam_idx, len(cam_folders) - 1)
+            gt_cam_folder = cam_folders[cam_idx]
+            cam_name = os.path.basename(gt_cam_folder)
+            print(f"Using camera: {cam_name}")
+            
+            # ===== Load GT Video and Mask =====
+            gt_video_path = os.path.join(gt_cam_folder, "undistorted.mp4")
+            mask_path = os.path.join(gt_cam_folder, "mask_refined.h5")
+            
+            if not os.path.exists(gt_video_path):
+                print(f"GT video not found: {gt_video_path}")
+                continue
+            
+            if not os.path.exists(mask_path):
+                print(f"Warning: Mask not found, will use raw frames: {mask_path}")
+                mask_path = None
+            
+            # Read GT frames with mask applied
+            print("Loading GT frames...")
+            gt_frames = []
+            cap = cv2.VideoCapture(gt_video_path)
+            
+            for frame_idx in tqdm(range(n_frames), desc="Loading GT"):
+                actual_frame_idx = frame_idx + offset
+                frame = read_video_frame(cap, actual_frame_idx)
+                if frame is None:
+                    print(f"Failed to read GT frame {actual_frame_idx}")
+                    break
+                
+                # Apply mask
+                if mask_path:
+                    mask = load_mask_h5(mask_path, actual_frame_idx)
+                    frame = apply_mask_to_frame(frame, mask)
+                
+                gt_frames.append(frame)
+            
+            cap.release()
+            print(f"Loaded {len(gt_frames)} GT frames")
+            
+            # ===== Load or Render Predictions =====
+            if args.skip_render:
+                # Use pre-rendered video (fallback mode)
+                pred_video_path = os.path.join(ep_dir, "inference.mp4")
+                if not os.path.exists(pred_video_path):
+                    print(f"Prediction video not found: {pred_video_path}")
+                    continue
+                
+                print("Loading pre-rendered predictions...")
+                pred_frames = []
+                cap = cv2.VideoCapture(pred_video_path)
+                for i in range(n_frames):
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pred_frames.append(frame)
+                cap.release()
+            else:
+                # ===== LBS Rendering =====
+                print("Setting up 3DGS + LBS rendering...")
+                
+                # Load 3DGS model
+                gs_path_pattern = f"{base_path}/{case_name}/splatfacto/*.ply"
+                gs_paths = sorted(glob.glob(gs_path_pattern))
+                if not gs_paths:
+                    print(f"3DGS model not found: {gs_path_pattern}")
+                    continue
+                gs_path = gs_paths[0]
+                print(f"Loading 3DGS from: {gs_path}")
+                
+                gaussians = GaussianModel(sh_degree=3)
+                gaussians.load_ply(gs_path)
+                gaussians = remove_gaussians_with_low_opacity(gaussians, 0.1)
+                
+                # Transform Gaussians from World Space to Marker Space
+                T_marker2world = np.array([[ 9.92500579e-01, -1.22225711e-01,  1.86443478e-03,  1.36186366e-01],
+                                          [ 5.43975403e-04, -1.08359291e-02, -9.99941142e-01, -1.88119571e-02],
+                                          [ 1.22238720e-01,  9.92443176e-01, -1.06881781e-02,  7.19721945e-02],
+                                          [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+                T_world2marker = np.linalg.inv(T_marker2world)
+                
+                R_motion = torch.tensor(T_world2marker[:3, :3], dtype=torch.float32, device="cuda")
+                t_motion = torch.tensor(T_world2marker[:3, 3], dtype=torch.float32, device="cuda")
+                
+                # Transform positions
+                xyz = gaussians.get_xyz
+                new_xyz = (xyz @ R_motion.T) + t_motion
+                gaussians._xyz = new_xyz
+                
+                # Transform rotations
+                curr_rot = gaussians.get_rotation  # (N, 4)
+                rot_world2marker = R.from_matrix(T_world2marker[:3, :3])
+                
+                # Scipy uses [x,y,z,w], GS uses [w,x,y,z]
+                quats_world_scipy = np.roll(curr_rot.detach().cpu().numpy(), -1, axis=1)
+                rots_world = R.from_quat(quats_world_scipy)
+                rots_marker = rot_world2marker * rots_world
+                quats_marker_scipy = rots_marker.as_quat()
+                quats_marker = np.roll(quats_marker_scipy, 1, axis=1)
+                gaussians._rotation = torch.tensor(quats_marker, dtype=curr_rot.dtype, device=curr_rot.device)
+                
+                # Load inference trajectory
+                inference_path = os.path.join(ep_dir, "inference.pkl")
+                if not os.path.exists(inference_path):
+                    print(f"Inference trajectory not found: {inference_path}")
+                    continue
+                
+                with open(inference_path, 'rb') as f:
+                    ctrl_pts = pickle.load(f)
+                ctrl_pts = torch.tensor(ctrl_pts, dtype=torch.float32, device="cuda")
+                print(f"Loaded trajectory: {ctrl_pts.shape}")
+                
+                # Load camera calibration
+                calibrate_path = f"{base_path}/{case_name}/calibrate.pkl"
+                metadata_path = f"{base_path}/{case_name}/metadata.json"
+                
+                if not os.path.exists(calibrate_path) or not os.path.exists(metadata_path):
+                    print(f"Camera calibration not found")
+                    continue
+                
+                with open(calibrate_path, 'rb') as f:
+                    c2ws = pickle.load(f)
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                
+                # Apply world-to-marker transformation to cameras (matches train_warp.py)
+                T_marker2world = np.array([[ 9.92500579e-01, -1.22225711e-01,  1.86443478e-03,  1.36186366e-01],
+                                          [ 5.43975403e-04, -1.08359291e-02, -9.99941142e-01, -1.88119571e-02],
+                                          [ 1.22238720e-01,  9.92443176e-01, -1.06881781e-02,  7.19721945e-02],
+                                          [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]])
+                T_world2marker = np.linalg.inv(T_marker2world)
+                
+                # Transform cameras to marker space
+                c2ws = [T_world2marker @ c2w for c2w in c2ws]
+                
+                intrinsics = np.array(metadata["intrinsics"])
+                WH = metadata["WH"]
+                width, height = WH
+                
+                # Get camera for selected view
+                c2w = c2ws[cam_idx]
+                w2c = np.linalg.inv(c2w)
+                intrinsic = intrinsics[cam_idx]
+                
+                view = create_camera_view(w2c, intrinsic, height, width, cam_idx)
+                background = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
+                
+                # Render with LBS
+                print("Rendering predictions with LBS...")
+                pred_frames = render_gaussians_lbs(
+                    gaussians, ctrl_pts, view, background, n_frames
+                )
+
+                # Applying same mask applied to GT to rendered predictions
+                if mask_path:
+                    print("Applying mask to predictions...")
+                    for i, frame in enumerate(tqdm(pred_frames, desc="Masking predictions")):
+                        actual_frame_idx = i + offset
+                        mask = load_mask_h5(mask_path, actual_frame_idx)
+                        pred_frames[i] = apply_mask_to_frame(frame, mask)
+            
+            print(f"Loaded {len(pred_frames)} prediction frames")
+            
+            # ===== Calculate Metrics =====
+            # Train/Test split (relative to loaded frames, not offset)
+            train_start = 0
+            train_end = train_range[1] - offset
+            test_start = test_range[0] - offset
+            test_end = min(test_range[1] - offset, len(gt_frames))
+            
+            # Clamp to available frames
+            train_end = min(train_end, len(gt_frames), len(pred_frames))
+            test_end = min(test_end, len(gt_frames), len(pred_frames))
+            
+            print(f"Eval ranges: Train: {train_start}-{train_end}, Test: {test_start}-{test_end}")
+            
+            gt_train = gt_frames[train_start:train_end]
+            pred_train = pred_frames[train_start:train_end]
+            gt_test = gt_frames[test_start:test_end]
+            pred_test = pred_frames[test_start:test_end]
+            
+            # Save comparison video
+            output_dir = os.path.dirname(output_file) or "."
+            debug_video_path = os.path.join(output_dir, f"{case_name}_comparison.mp4")
+            save_comparison_video(gt_frames, pred_frames, debug_video_path)
+            
+            # Calculate metrics
+            print("Calculating metrics...")
+            train_metrics = calculate_metrics(gt_train, pred_train)
+            test_metrics = calculate_metrics(gt_test, pred_test)
+            
+            print(f"Train: PSNR={train_metrics['psnr']:.2f}, SSIM={train_metrics['ssim']:.4f}, LPIPS={train_metrics['lpips']:.4f}")
+            print(f"Test:  PSNR={test_metrics['psnr']:.2f}, SSIM={test_metrics['ssim']:.4f}, LPIPS={test_metrics['lpips']:.4f}")
+            
+            writer.writerow([
+                case_name,
+                f"{train_metrics['psnr']:.4f}", f"{train_metrics['ssim']:.4f}", f"{train_metrics['lpips']:.4f}",
+                f"{test_metrics['psnr']:.4f}", f"{test_metrics['ssim']:.4f}", f"{test_metrics['lpips']:.4f}"
+            ])
+            file.flush()
+
+            # WandB logging
+            if args.ep_idx is not None:
+                # Infer object name from base_path
+                obj_name = os.path.basename(base_path)
+                run_name = f"{obj_name}_ep_{args.ep_idx}"
+                
+                # Check if there is already an active run
+                if wandb.run is None:
+                    wandb.init(project="deformable_dynamics", name=run_name, resume="allow", config={"method": "PhysTwin"})
+                
+                wandb.log({
+                    "train/psnr": train_metrics['psnr'],
+                    "train/ssim": train_metrics['ssim'],
+                    "train/lpips": train_metrics['lpips'],
+                    "test/psnr": test_metrics['psnr'],
+                    "test/ssim": test_metrics['ssim'],
+                    "test/lpips": test_metrics['lpips'],
+                    "eval/comparison_video": wandb.Video(debug_video_path, fps=30, format="mp4")
+                })
+    
+    if wandb.run is not None:
+        wandb.finish()
+    print(f"\nResults saved to {output_file}")
 
 
 if __name__ == "__main__":
-    render_path = './data/render_eval_data'
-    human_mask_path = "./data/different_types_human_mask"
-    root_data_dir = './data/gaussian_data'
-    output_dir = './gaussian_output_dynamic'
-
-    log_dir = './results'
-    os.makedirs(log_dir, exist_ok=True)
-    log_file_path = os.path.join(log_dir, 'output_dynamic.txt')
-
-    with open(log_file_path, 'w') as log_file:
-
-        scene_name = sorted(os.listdir(render_path))
-
-        all_psnrs_train, all_ssims_train, all_lpipss_train, all_ious_train = [], [], [], []
-        all_psnrs_test, all_ssims_test, all_lpipss_test, all_ious_test = [], [], [], []
-
-        scene_metrics = {}
-
-        for scene in scene_name:
-
-            scene_dir = os.path.join(root_data_dir, scene)
-            output_scene_dir = os.path.join(output_dir, scene)
-            render_path_dir = os.path.join(render_path, scene)
-            human_mask_dir = os.path.join(human_mask_path, scene)
-
-            # Load frame split info
-            with open(f"{render_path_dir}/split.json", 'r') as f:
-                info = json.load(f)
-            frame_len = info['frame_len']
-            train_f_idx_range = list(range(info["train"][0] + 1, info["train"][1]))   # +1 if ignoring the first frame
-            test_f_idx_range = list(range(info["test"][0], info["test"][1]))
-
-            print("train indices range from", train_f_idx_range[0], "to", train_f_idx_range[-1])
-            print("test indices range from", test_f_idx_range[0], "to", test_f_idx_range[-1])
-
-            psnrs_train, ssims_train, lpipss_train, ious_train = [], [], [], []
-            psnrs_test, ssims_test, lpipss_test, ious_test = [], [], [], []
-
-            # for view_idx in range(3):
-            for view_idx in range(1):   # only consider the first view
-
-                for frame_idx in train_f_idx_range:
-                    gt = np.array(Image.open(os.path.join(render_path_dir, 'color', str(view_idx), f'{frame_idx}.png')))
-                    gt_mask = np.array(Image.open(os.path.join(render_path_dir, 'mask', str(view_idx), f'{frame_idx}.png')))
-                    gt_mask = gt_mask.astype(np.float32) / 255.
-
-                    render = np.array(Image.open(os.path.join(output_scene_dir, str(view_idx), f'{frame_idx:05d}.png')))
-                    render_mask = render[:, :, 3] if render.shape[-1] == 4 else np.ones_like(render[:, :, 0])
-
-                    human_mask = np.array(Image.open(os.path.join(human_mask_dir, 'mask', str(view_idx), '0', f'{frame_idx}.png')))
-                    inv_human_mask = (1.0 - human_mask / 255.).astype(np.float32)
-
-                    gt = gt.astype(np.float32) * gt_mask[..., None]
-                    bg_mask = gt_mask == 0
-                    gt[bg_mask] = [0, 0, 0]
-                    render = render[:, :, :3].astype(np.float32)
-
-                    gt = gt * inv_human_mask[..., None]
-                    render = render * inv_human_mask[..., None]
-                    render_mask = render_mask * inv_human_mask
-
-                    gt_tensor = img2tensor(gt)
-                    render_tensor = img2tensor(render)
-
-                    psnrs_train.append(psnr(render_tensor, gt_tensor).item())
-                    ssims_train.append(ssim(render_tensor, gt_tensor).item())
-                    lpipss_train.append(lpips(render_tensor, gt_tensor).item())
-                    ious_train.append(compute_iou(gt_mask > 0, render_mask > 0))
-
-                for frame_idx in test_f_idx_range:
-                        
-                    gt = np.array(Image.open(os.path.join(render_path_dir, 'color', str(view_idx), f'{frame_idx}.png')))
-                    gt_mask = np.array(Image.open(os.path.join(render_path_dir, 'mask', str(view_idx), f'{frame_idx}.png')))
-                    gt_mask = gt_mask.astype(np.float32) / 255.
-
-                    render = np.array(Image.open(os.path.join(output_scene_dir, str(view_idx), f'{frame_idx:05d}.png')))
-                    render_mask = render[:, :, 3] if render.shape[-1] == 4 else np.ones_like(render[:, :, 0])
-
-                    human_mask = np.array(Image.open(os.path.join(human_mask_dir, 'mask', str(view_idx), '0', f'{frame_idx}.png')))
-                    inv_human_mask = (1.0 - human_mask / 255.).astype(np.float32)
-
-                    gt = gt.astype(np.float32) * gt_mask[..., None]
-                    bg_mask = gt_mask == 0
-                    gt[bg_mask] = [0, 0, 0]
-                    render = render[:, :, :3].astype(np.float32)
-
-                    gt = gt * inv_human_mask[..., None]
-                    render = render * inv_human_mask[..., None]
-                    render_mask = render_mask * inv_human_mask
-
-                    gt_tensor = img2tensor(gt)
-                    render_tensor = img2tensor(render)
-
-                    psnrs_test.append(psnr(render_tensor, gt_tensor).item())
-                    ssims_test.append(ssim(render_tensor, gt_tensor).item())
-                    lpipss_test.append(lpips(render_tensor, gt_tensor).item())
-                    ious_test.append(compute_iou(gt_mask > 0, render_mask > 0))
-
-            scene_metrics[scene] = {
-                'psnr_train': np.mean(psnrs_train),
-                'ssim_train': np.mean(ssims_train),
-                'lpips_train': np.mean(lpipss_train),
-                'iou_train': np.mean(ious_train),
-                'psnr_test': np.mean(psnrs_test),
-                'ssim_test': np.mean(ssims_test),
-                'lpips_test': np.mean(lpipss_test),
-                'iou_test': np.mean(ious_test)
-            }
-
-            all_psnrs_train.extend(psnrs_train)
-            all_ssims_train.extend(ssims_train)
-            all_lpipss_train.extend(lpipss_train)
-            all_ious_train.extend(ious_train)
-
-            all_psnrs_test.extend(psnrs_test)
-            all_ssims_test.extend(ssims_test)
-            all_lpipss_test.extend(lpipss_test)
-            all_ious_test.extend(ious_test)
-
-            print(f'===== Scene: {scene} =====')
-            print(f'\t PSNR (train): {np.mean(psnrs_train):.4f}')
-            print(f'\t SSIM (train): {np.mean(ssims_train):.4f}')
-            print(f'\t LPIPS (train): {np.mean(lpipss_train):.4f}')
-            print(f'\t IoU (train): {np.mean(ious_train):.4f}')
-
-            print(f'\t PSNR (test): {np.mean(psnrs_test):.4f}')
-            print(f'\t SSIM (test): {np.mean(ssims_test):.4f}')
-            print(f'\t LPIPS (test): {np.mean(lpipss_test):.4f}')
-            print(f'\t IoU (test): {np.mean(ious_test):.4f}')
-
-        print('===== Overall Results Across All Scenes =====')
-        print(f'\t Overall PSNR (train): {np.mean(all_psnrs_train):.4f}')
-        print(f'\t Overall SSIM (train): {np.mean(all_ssims_train):.4f}')
-        print(f'\t Overall LPIPS (train): {np.mean(all_lpipss_train):.4f}')
-        print(f'\t Overall IoU (train): {np.mean(all_ious_train):.4f}')
-
-        print(f'\t Overall PSNR (test): {np.mean(all_psnrs_test):.4f}')
-        print(f'\t Overall SSIM (test): {np.mean(all_ssims_test):.4f}')
-        print(f'\t Overall LPIPS (test): {np.mean(all_lpipss_test):.4f}')
-        print(f'\t Overall IoU (test): {np.mean(all_ious_test):.4f}')
-
-        overall_psnr_train = np.mean(all_psnrs_train)
-        overall_ssim_train = np.mean(all_ssims_train)
-        overall_lpips_train = np.mean(all_lpipss_train)
-        overall_iou_train = np.mean(all_ious_train)
-        
-        overall_psnr_test = np.mean(all_psnrs_test)
-        overall_ssim_test = np.mean(all_ssims_test)
-        overall_lpips_test = np.mean(all_lpipss_test)
-        overall_iou_test = np.mean(all_ious_test)
-
-        # Write overall metrics to log file
-        log_file.write("\n" + "=" * 80 + "\n")
-        log_file.write("OVERALL RESULTS ACROSS ALL SCENES\n")
-        log_file.write("=" * 80 + "\n\n")
-        
-        log_file.write(f"Overall PSNR (train): {overall_psnr_train:.6f}\n")
-        log_file.write(f"Overall SSIM (train): {overall_ssim_train:.6f}\n")
-        log_file.write(f"Overall LPIPS (train): {overall_lpips_train:.6f}\n")
-        log_file.write(f"Overall IoU (train): {overall_iou_train:.6f}\n\n")
-        
-        log_file.write(f"Overall PSNR (test): {overall_psnr_test:.6f}\n")
-        log_file.write(f"Overall SSIM (test): {overall_ssim_test:.6f}\n")
-        log_file.write(f"Overall LPIPS (test): {overall_lpips_test:.6f}\n")
-        log_file.write(f"Overall IoU (test): {overall_iou_test:.6f}\n\n")
-        
-        # Create a compact table of all scene metrics
-        log_file.write("\n" + "=" * 80 + "\n")
-        log_file.write("COMPACT METRICS TABLE BY SCENE\n")
-        log_file.write("=" * 80 + "\n\n")
-        
-        # Header
-        log_file.write(f"{'Scene':<50} | {'PSNR-train':<12} | {'SSIM-train':<12} | {'LPIPS-train':<14} | {'IoU-train':<12} | ")
-        log_file.write(f"{'PSNR-test':<12} | {'SSIM-test':<12} | {'LPIPS-test':<14} | {'IoU-test':<12}\n")
-        log_file.write("-" * 160 + "\n")
-        
-        # Scene rows
-        for scene in scene_name:
-            metrics = scene_metrics[scene]
-            log_file.write(f"{scene[:50]:<50} | ")
-            log_file.write(f"{metrics['psnr_train']:<12.6f} | ")
-            log_file.write(f"{metrics['ssim_train']:<12.6f} | ")
-            log_file.write(f"{metrics['lpips_train']:<14.6f} | ")
-            log_file.write(f"{metrics['iou_train']:<12.6f} | ")
-            
-            log_file.write(f"{metrics['psnr_test']:<12.6f} | ")
-            log_file.write(f"{metrics['ssim_test']:<12.6f} | ")
-            log_file.write(f"{metrics['lpips_test']:<14.6f} | ")
-            log_file.write(f"{metrics['iou_test']:<12.6f}\n")
-        
-        # Overall row
-        log_file.write("-" * 160 + "\n")
-        log_file.write(f"{'OVERALL':<50} | ")
-        log_file.write(f"{overall_psnr_train:<12.6f} | ")
-        log_file.write(f"{overall_ssim_train:<12.6f} | ")
-        log_file.write(f"{overall_lpips_train:<14.6f} | ")
-        log_file.write(f"{overall_iou_train:<12.6f} | ")
-        
-        log_file.write(f"{overall_psnr_test:<12.6f} | ")
-        log_file.write(f"{overall_ssim_test:<12.6f} | ")
-        log_file.write(f"{overall_lpips_test:<14.6f} | ")
-        log_file.write(f"{overall_iou_test:<12.6f}\n")
-        
-        print(f"\nMetrics have been saved to: {log_file_path}")
+    main()
