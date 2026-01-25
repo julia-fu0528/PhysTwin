@@ -35,9 +35,6 @@ sys.path.insert(0, _root_dir)
 sys.path.insert(0, _this_dir)
 
 # Import from gaussian_splatting submodules (using absolute paths from root)
-from gaussian_splatting.utils.loss_utils import ssim
-from gaussian_splatting.lpipsPyTorch import lpips
-from gaussian_splatting.utils.image_utils import psnr
 from gaussian_splatting.scene.gaussian_model import GaussianModel
 from gaussian_splatting.scene.cameras import Camera
 from gaussian_splatting.gaussian_renderer import render
@@ -299,40 +296,6 @@ def parse_args():
     parser.add_argument("--no_wandb", action="store_true",
                         help="Skip WandB logging")
     return parser.parse_args()
-
-
-def calculate_metrics(gt_frames, pred_frames):
-    """Calculate PSNR, SSIM, LPIPS metrics between GT and predicted frames."""
-    if len(gt_frames) != len(pred_frames):
-        print(f"Warning: Frame count mismatch: {len(gt_frames)} vs {len(pred_frames)}")
-        min_len = min(len(gt_frames), len(pred_frames))
-        gt_frames = gt_frames[:min_len]
-        pred_frames = pred_frames[:min_len]
-    
-    if len(gt_frames) == 0:
-        return {"psnr": 0, "ssim": 0, "lpips": 0, "count": 0}
-    
-    psnrs, ssims, lpipss = [], [], []
-    
-    for i in range(len(gt_frames)):
-        gt = gt_frames[i]
-        pred = pred_frames[i]
-        
-        gt_tensor = img2tensor(gt)
-        if gt.shape != pred.shape:
-            pred = cv2.resize(pred, (gt.shape[1], gt.shape[0]))
-        pred_tensor = img2tensor(pred)
-        
-        psnrs.append(psnr(pred_tensor, gt_tensor).item())
-        ssims.append(ssim(pred_tensor, gt_tensor).item())
-        lpipss.append(lpips(pred_tensor, gt_tensor, net_type='vgg').item())
-    
-    return {
-        "psnr": np.mean(psnrs),
-        "ssim": np.mean(ssims),
-        "lpips": np.mean(lpipss),
-        "count": len(psnrs)
-    }
 
 
 def main():
