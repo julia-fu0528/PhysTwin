@@ -54,6 +54,13 @@ class Config:
         self.visualize = True
         self.no_gui = False
 
+    @property
+    def main_vis_cam_idx(self):
+        """Returns the first index in vis_cam_indices, or 23 as a default."""
+        if self.vis_cam_indices is not None and len(self.vis_cam_indices) > 0:
+            return self.vis_cam_indices[0]
+        return 23
+
     def to_dict(self):
         # Convert the class to dictionary
         return {

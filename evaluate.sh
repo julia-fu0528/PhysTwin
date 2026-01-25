@@ -1,3 +1,12 @@
-python evaluate_chamfer.py
-python evaluate_track.py
-python gaussian_splatting/evaluate_render.py
+#!/bin/bash
+# Usage: ./evaluate.sh [--base_path PATH] [--prediction_dir PATH]
+# If no arguments provided, uses DATA_PATH below
+
+DATA_PATH="/oscar/data/gdk/hli230/projects/vitac-particle/processed/001-rope"
+
+# The base_path is where GT data lives (e.g., {DATA_PATH}/episode_0/final_data.pkl)
+# The prediction_dir is where experiments are (e.g., {DATA_PATH}/experiments/episode_0)
+
+python evaluate_chamfer.py --base_path "$DATA_PATH" --prediction_dir "$DATA_PATH/experiments" "$@"
+python evaluate_track.py --base_path "$DATA_PATH" --prediction_dir "$DATA_PATH/experiments" "$@"
+python gaussian_splatting/evaluate_render.py --base_path "$DATA_PATH" --prediction_dir "$DATA_PATH/experiments" "$@"

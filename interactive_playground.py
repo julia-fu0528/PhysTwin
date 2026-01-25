@@ -11,6 +11,9 @@ import pickle
 import json
 import sys
 
+# test torch inverse
+torch.inverse(torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=torch.float32))
+
 def set_all_seeds(seed):
     random.seed(seed)
     np.random.seed(seed)

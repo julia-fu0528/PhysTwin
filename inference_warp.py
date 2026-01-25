@@ -29,11 +29,13 @@ if __name__ == "__main__":
     parser.add_argument("--base_path", type=str, required=True)
     parser.add_argument("--case_name", type=str, required=True)
     parser.add_argument("--remove_cams", type=str, default=None)
+    parser.add_argument("--vis_cam_idx", type=int, default=23)
     args = parser.parse_args()
 
     base_path = args.base_path
     case_name = args.case_name
     remove_cams = args.remove_cams
+    vis_cam_idx = args.vis_cam_idx
     if remove_cams is not None:
         remove_cams = [c for c in remove_cams.split(',') if c]
         print(f"remove cams: {remove_cams}")
@@ -43,6 +45,7 @@ if __name__ == "__main__":
     else:
         cfg.load_from_yaml("configs/real.yaml")
 
+    cfg.vis_cam_indices = [vis_cam_idx]
     logger.info(f"[DATA TYPE]: {cfg.data_type}")
 
     base_dir = f"{base_path}/experiments/{case_name}"
