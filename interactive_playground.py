@@ -97,7 +97,7 @@ if __name__ == "__main__":
 
     exp_name = "init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0"
     # gaussians_path = f"{args.gaussian_path}/{case_name}/{exp_name}/point_cloud/iteration_10000/point_cloud.ply"
-    gaussians_path = sorted(glob.glob(f"{base_path}/{case_name}/pcd_4dgs1111/frame_030000_time_*.ply"))[0]
+    gaussians_path = sorted(glob.glob(f"{base_path}/{case_name}/splatfacto/*.ply"))[0]
     # gaussians_path = "base_cloth.ply"
     # gaussians_path = f"{base_path}/{case_name}/start_obj_pcd.ply"
     logger.set_log_file(path=base_dir, name="inference_log")
