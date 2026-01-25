@@ -22,6 +22,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 
+import wandb
 from accelerate import Accelerator
 from accelerate.utils import set_seed
 
@@ -123,9 +124,21 @@ class ParticleFormerTrainer:
         
         # Initialize wandb
         if config.use_wandb and self.accelerator.is_main_process:
+            run_name = f"{config.object_name}_ep_{config.ep_idx}"
             self.accelerator.init_trackers(
-                project_name=config.wandb_project,
-                config=config.__dict__,
+                project_name="deformable_dynamics",
+                config={
+                    "method": "ParticleFormer",
+                    "object_name": config.object_name,
+                    "ep_idx": config.ep_idx,
+                    **config.__dict__
+                },
+                init_kwargs={
+                    "wandb": {
+                        "name": run_name,
+                        "resume": "allow"
+                    }
+                }
             )
 
         # Initialize metrics
@@ -181,11 +194,6 @@ class ParticleFormerTrainer:
             # Evaluation
             if eval_dataloader is not None and (epoch + 1) % config.eval_interval == 0:
                 eval_metrics = self._eval_epoch(eval_dataloader)
-                
-                # Perform full rollout evaluation
-                full_metrics = self._eval_full_rollout(eval_dataloader)
-                eval_metrics.update(full_metrics)
-                
                 self.log(f"Eval: {eval_metrics}")
                 
                 # Save best model
@@ -200,6 +208,14 @@ class ParticleFormerTrainer:
         # Save final model
         self._save_checkpoint("final")
         
+        # FINAL LOGGING TO WANDB
+        if eval_dataloader is not None:
+             self.log("Performing final evaluation for WandB...")
+             final_metrics = self._eval_full_rollout(eval_dataloader)
+             self.log(f"Final Metrics: {final_metrics}")
+             if config.use_wandb:
+                 self.accelerator.log(final_metrics)
+
         if config.use_wandb:
             self.accelerator.end_training()
         
@@ -244,15 +260,6 @@ class ParticleFormerTrainer:
                     f"hd={metrics['hausdorff_distance']:.6f}, "
                     f"lr={lr:.2e}"
                 )
-                
-                if self.config.use_wandb:
-                    self.accelerator.log({
-                        "train/loss": metrics["loss"],
-                        "train/chamfer_distance": metrics["chamfer_distance"],
-                        "train/hausdorff_distance": metrics["hausdorff_distance"],
-                        "train/learning_rate": lr,
-                        "train/epoch": self.epoch,
-                    }, step=self.global_step)
         
         return {
             "loss": total_loss / num_batches,
@@ -464,10 +471,15 @@ class ParticleFormerTrainer:
         
         counts = {"chamfer": 0, "track": 0, "render": 0}
         sums = {
-            "chamfer_error": 0.0, "track_error": 0.0,
-            "train_render_psnr": 0.0, "train_render_ssim": 0.0, "train_render_lpips": 0.0,
-            "test_render_psnr": 0.0, "test_render_ssim": 0.0, "test_render_lpips": 0.0
+            "train/chamfer_error": 0.0, "test/chamfer_error": 0.0,
+            "train/chamfer_frame_num": 0.0, "test/chamfer_frame_num": 0.0,
+            "train/track_error": 0.0, "test/track_error": 0.0,
+            "train/psnr": 0.0, "train/ssim": 0.0, "train/lpips": 0.0,
+            "test/psnr": 0.0, "test/ssim": 0.0, "test/lpips": 0.0
         }
+        
+        # To log video to wandb once per eval
+        first_video_path = None
         
         
         eval_episodes = 0
@@ -618,54 +630,45 @@ class ParticleFormerTrainer:
                 
                 # Eval Metrics
                 # Chamfer
-                c_res = self.chamfer_metric.evaluate(ep_path, pred_positions, self.epoch)
-                if "chamfer_error" in c_res:
-                    sums["chamfer_error"] += c_res["chamfer_error"]
-                    counts["chamfer"] += 1
+                c_res = self.chamfer_metric.evaluate(ep_path, pred_positions[:, :num_obj], self.epoch)
+                for k in ["train/chamfer_error", "test/chamfer_error", "train/chamfer_frame_num", "test/chamfer_frame_num"]:
+                    if k in c_res:
+                        sums[k] += c_res[k]
+                counts["chamfer"] += 1
                 
                 # Track
-                t_res = self.track_metric.evaluate(ep_path, pred_positions, self.epoch)
-                if "track_error" in t_res:
-                    sums["track_error"] += t_res["track_error"]
-                    counts["track"] += 1
+                t_res = self.track_metric.evaluate(ep_path, pred_positions[:, :num_obj], self.epoch)
+                for k in ["train/track_error", "test/track_error"]:
+                    if k in t_res:
+                        sums[k] += t_res[k]
+                counts["track"] += 1
                 
-                # Render (Expensive!)
-                # Only run on first episode of the batch/epoch to save time?
-                # User said "match eval_interval".
-                # Let's run it for every evaluated episode here (capped at max_eval_episodes)
+                # Render
                 r_res = self.render_metric.evaluate(ep_path, pred_positions, self.epoch)
+                for k in ["train/psnr", "train/ssim", "train/lpips", "test/psnr", "test/ssim", "test/lpips"]:
+                    if k in r_res:
+                        sums[k] += r_res[k]
                 
-                # Check for train metrics
-                if "train/psnr" in r_res:
-                    sums["train_render_psnr"] += r_res["train/psnr"]
-                    sums["train_render_ssim"] += r_res["train/ssim"]
-                    sums["train_render_lpips"] += r_res["train/lpips"]
-                    
-                # Check for test metrics
-                if "test/psnr" in r_res:
-                    sums["test_render_psnr"] += r_res["test/psnr"]
-                    sums["test_render_ssim"] += r_res["test/ssim"]
-                    sums["test_render_lpips"] += r_res["test/lpips"]
+                if "test/comparison_video" in r_res and first_video_path is None:
+                    first_video_path = r_res["test/comparison_video"]
                 
-                if "train/psnr" in r_res or "test/psnr" in r_res:
-                    counts["render"] += 1
-                
+                counts["render"] += 1
                 eval_episodes += 1
         
         # Average metrics
         metrics = {}
         if counts["chamfer"] > 0:
-            metrics["eval/chamfer_error"] = sums["chamfer_error"] / counts["chamfer"]
+            for k in ["train/chamfer_error", "test/chamfer_error", "train/chamfer_frame_num", "test/chamfer_frame_num"]:
+                metrics[k] = sums[k] / counts["chamfer"]
         if counts["track"] > 0:
-            metrics["eval/track_error"] = sums["track_error"] / counts["track"]
+            for k in ["train/track_error", "test/track_error"]:
+                metrics[k] = sums[k] / counts["track"]
         if counts["render"] > 0:
-            metrics["eval/train_render_psnr"] = sums["train_render_psnr"] / counts["render"]
-            metrics["eval/train_render_ssim"] = sums["train_render_ssim"] / counts["render"]
-            metrics["eval/train_render_lpips"] = sums["train_render_lpips"] / counts["render"]
+            for k in ["train/psnr", "train/ssim", "train/lpips", "test/psnr", "test/ssim", "test/lpips"]:
+                metrics[k] = sums[k] / counts["render"]
             
-            metrics["eval/test_render_psnr"] = sums["test_render_psnr"] / counts["render"]
-            metrics["eval/test_render_ssim"] = sums["test_render_ssim"] / counts["render"]
-            metrics["eval/test_render_lpips"] = sums["test_render_lpips"] / counts["render"]
+        if first_video_path and self.config.use_wandb and self.accelerator.is_main_process:
+            metrics["test/comparison_video"] = wandb.Video(first_video_path, fps=30, format="mp4")
             
         return metrics
 

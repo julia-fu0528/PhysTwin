@@ -41,6 +41,8 @@ class ParticleFormerConfig:
     # Data parameters
     data_root: str = "/mnt/data/ParticleData/processed"
     split_json: str = "split.json"
+    object_name: str = "001-rope"
+    ep_idx: int = 0
     
     # Logging
     log_interval: int = 10

@@ -226,6 +226,8 @@ def main():
         config = ParticleFormerConfig(
             data_root=args.data_root,
             split_json=args.split_json,
+            object_name=args.object,
+            ep_idx=args.episode,
             d_model=args.d_model,
             nhead=args.nhead,
             num_layers=args.num_layers,

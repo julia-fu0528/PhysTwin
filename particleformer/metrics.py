@@ -46,14 +46,23 @@ class ChamferMetric(BaseMetric):
     def evaluate(self, episode_path: str, pred_positions: torch.Tensor, current_epoch: int, **kwargs) -> Dict[str, float]:
         # Load GT data
         gt_path = os.path.join(episode_path, "final_data.pkl")
+        split_path = os.path.join(episode_path, "split.json")
+        metadata_path = os.path.join(episode_path, "metadata.json")
+
         with open(gt_path, "rb") as f:
             data = pickle.load(f)
+        with open(split_path, "r") as f:
+            split_data = json.load(f)
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
             
         object_points = data["object_points"]  # (T, N_obj, 3)
-        surface_points = data["surface_points"] # (N_surf, 3)
         object_visibilities = data.get("object_visibilities", None)
+        train_range = split_data.get("train", [0, 0])
+        test_range = split_data.get("test", [0, 0])
+        offset = metadata.get("start_frame", 0)
         
-        # Transform GT to marker space (same as in evaluate_chamfer.py)
+        # Transform GT to marker space
         T_marker2world = np.array([[ 9.92500579e-01, -1.22225711e-01,  1.86443478e-03,  1.36186366e-01],
                                   [ 5.43975403e-04, -1.08359291e-02, -9.99941142e-01, -1.88119571e-02],
                                   [ 1.22238720e-01,  9.92443176e-01, -1.06881781e-02,  7.19721945e-02],
@@ -71,12 +80,6 @@ class ChamferMetric(BaseMetric):
         object_points_homog = np.concatenate([object_points.reshape(-1, 3), np.ones((object_points.size // 3, 1))], axis=-1)
         object_points = (T_world2marker @ object_points_homog.T).T[:, :3].reshape(orig_shape)
         
-        # Transform surface_points
-        surface_points_homog = np.concatenate([surface_points, np.ones((surface_points.shape[0], 1))], axis=-1)
-        surface_points = (T_world2marker @ surface_points_homog.T).T[:, :3]
-        
-        num_surface_points = object_points.shape[1] + surface_points.shape[0]
-        
         # Prepare tensors
         object_points_torch = torch.from_numpy(object_points).float().to(pred_positions.device)
         if object_visibilities is not None:
@@ -84,37 +87,36 @@ class ChamferMetric(BaseMetric):
         else:
              object_visibilities_torch = torch.ones_like(object_points_torch[..., 0], dtype=torch.bool)
 
-        chamfer_errors = []
-        n_frames = min(len(pred_positions), len(object_points))
+        n_frames = len(pred_positions)
         
-        # Start from frame 1 (skip initial state)
-        for t in range(1, n_frames):
-            pred_t = pred_positions[t]
-            gt_t = object_points_torch[t]
-            vis_t = object_visibilities_torch[t]
-            
-            gt_points_vis = gt_t[vis_t]
-            # Use only first num_surface_points of prediction (assuming they correspond to object/surface)
-            # Note: pred_positions contains both object and controller particles. 
-            # We need to know which are object particles. 
-            # In ParticleFormer, object particles come first.
-            # However, we rely on the caller to provide only object part or we slice it here?
-            # The trainer logic passes "pred_positions" which usually includes everything.
-            # But evaluate_chamfer slices: x[:num_surface_points].
-            # We will use the 'num_object_particles' from kwargs if available, or assume all are object?
-            # Actually, let's just use what's passed. Trainer should pass appropriate points.
-            
-            # Use L1 Chamfer distance
-            if len(gt_points_vis) > 0:
-                dist1, dist2 = chamfer_distance(
-                    gt_points_vis.unsqueeze(0),
-                    pred_t.unsqueeze(0),
-                    single_directional=True,
-                    norm=1
-                )
-                chamfer_errors.append(dist1.item())
-        
-        return {"chamfer_error": np.mean(chamfer_errors) if chamfer_errors else 0.0}
+        # Calculate Frame Indices
+        train_start_rel = max(0, train_range[0] - offset)
+        train_end_rel = min(n_frames, train_range[1] - offset)
+        test_start_rel = max(0, test_range[0] - offset)
+        test_end_rel = min(n_frames, test_range[1] - offset)
+
+        def compute_avg_chamfer(start, end):
+            errors = []
+            for t in range(start, end):
+                if t == 0: continue # Skip first frame usually
+                pred_t = pred_positions[t]
+                gt_t = object_points_torch[t]
+                vis_t = object_visibilities_torch[t]
+                gt_points_vis = gt_t[vis_t]
+                if len(gt_points_vis) > 0:
+                    dist1, _ = chamfer_distance(gt_points_vis.unsqueeze(0), pred_t.unsqueeze(0), single_directional=True, norm=1)
+                    errors.append(dist1.item())
+            return np.mean(errors) if errors else 0.0, len(errors)
+
+        train_err, train_num = compute_avg_chamfer(train_start_rel, train_end_rel)
+        test_err, test_num = compute_avg_chamfer(test_start_rel, test_end_rel)
+
+        return {
+            "train/chamfer_error": train_err,
+            "test/chamfer_error": test_err,
+            "train/chamfer_frame_num": train_num,
+            "test/chamfer_frame_num": test_num
+        }
 
 
 class TrackMetric(BaseMetric):
@@ -122,10 +124,20 @@ class TrackMetric(BaseMetric):
     
     def evaluate(self, episode_path: str, pred_positions: torch.Tensor, current_epoch: int, **kwargs) -> Dict[str, float]:
         gt_path = os.path.join(episode_path, "final_data.pkl")
+        split_path = os.path.join(episode_path, "split.json")
+        metadata_path = os.path.join(episode_path, "metadata.json")
+
         with open(gt_path, "rb") as f:
             data = pickle.load(f)
+        with open(split_path, "r") as f:
+            split_data = json.load(f)
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
             
         gt_track_3d = data["object_points"] # (T, N, 3)
+        train_range = split_data.get("train", [0, 0])
+        test_range = split_data.get("test", [0, 0])
+        offset = metadata.get("start_frame", 0)
         
         # Transform to marker space
         T_marker2world = np.array([[ 9.92500579e-01, -1.22225711e-01,  1.86443478e-03,  1.36186366e-01],
@@ -144,69 +156,38 @@ class TrackMetric(BaseMetric):
         gt_points_homog = np.concatenate([gt_track_3d.reshape(-1, 3), np.ones((gt_track_3d.size // 3, 1))], axis=-1)
         gt_track_3d = (T_world2marker @ gt_points_homog.T).T[:, :3].reshape(orig_shape)
         
-        # Find correspondence on first frame (t=0)
-        # Using KDTree on CPU for simplicity as in evaluate_track.py
         pred_0 = pred_positions[0].cpu().numpy()
         gt_0 = gt_track_3d[0]
-        
         mask = ~np.isnan(gt_0).any(axis=1)
         if not mask.any():
-            return {"track_error": 0.0}
+            return {"train/track_error": 0.0, "test/track_error": 0.0}
             
         kdtree = KDTree(pred_0)
         dis, idx = kdtree.query(gt_0[mask])
         
-        track_errors = []
-        n_frames = min(len(pred_positions), len(gt_track_3d))
-        
-        for t in range(1, n_frames):
-            gt_t = gt_track_3d[t]
-            pred_t = pred_positions[t].cpu().numpy()
-            
-            # Current mask
-            curr_mask = ~np.isnan(gt_t).any(axis=1)
-            # Intersect with initial mask
-            combined_mask = mask & curr_mask
-            
-            if not combined_mask.any():
-                continue
-                
-            # Filter GT and Pred
-            # Note: idx maps from GT index (masked) to Pred index
-            # But idx was computed only for points where mask=True
-            # We need to act carefully.
-            
-            # Let's subset GT points that are valid in both frames
-            gt_valid = gt_t[combined_mask]
-            
-            # For preds, we need the indices corresponding to these GT points
-            # intersect_indices_in_mask tells us which of the originally masked points are still valid
-            
-            # Indices in the original N array
-            valid_indices = np.where(combined_mask)[0]
-            
-            # Map valid_indices to their position in 'mask' to get the correct 'idx'
-            # This is tricky. Let's re-do strictly as evaluate_track.py:
-            # new_mask = ~np.isnan(gt_track_3d[frame_idx][mask]).any(axis=1)
-            # gt_track_points = gt_track_3d[frame_idx][mask][new_mask]
-            # pred_x = vertices[frame_idx][idx][new_mask]
-            
-            # 'mask' is the boolean mask for frame 0
-            # 'idx' is indices into prediction for points where 'mask' is True
-            
-            gt_subset_t = gt_track_3d[t][mask] # restrict to points valid in frame 0
-            new_mask_t = ~np.isnan(gt_subset_t).any(axis=1) # check validity in current frame
-            
-            gt_track_points = gt_subset_t[new_mask_t]
-            pred_points = pred_t[idx][new_mask_t]
-            
-            if len(pred_points) > 0:
-                err = np.mean(np.linalg.norm(pred_points - gt_track_points, axis=1))
-                track_errors.append(err)
-            else:
-                track_errors.append(0.0)
-                
-        return {"track_error": np.mean(track_errors) if track_errors else 0.0}
+        n_frames = len(pred_positions)
+        train_start_rel = max(0, train_range[0] - offset)
+        train_end_rel = min(n_frames, train_range[1] - offset)
+        test_start_rel = max(0, test_range[0] - offset)
+        test_end_rel = min(n_frames, test_range[1] - offset)
+
+        def compute_avg_track(start, end):
+            errors = []
+            for t in range(start, end):
+                if t == 0: continue
+                gt_subset_t = gt_track_3d[t][mask]
+                new_mask_t = ~np.isnan(gt_subset_t).any(axis=1)
+                gt_track_points = gt_subset_t[new_mask_t]
+                pred_points = pred_positions[t].cpu().numpy()[idx][new_mask_t]
+                if len(pred_points) > 0:
+                    err = np.mean(np.linalg.norm(pred_points - gt_track_points, axis=1))
+                    errors.append(err)
+            return np.mean(errors) if errors else 0.0
+
+        return {
+            "train/track_error": compute_avg_track(train_start_rel, train_end_rel),
+            "test/track_error": compute_avg_track(test_start_rel, test_end_rel)
+        }
 
 
 class RenderMetric(BaseMetric):
@@ -377,7 +358,7 @@ class RenderMetric(BaseMetric):
              
              # Using full frames for visualization
              save_comparison_video(gt_frames, pred_frames, save_path)
-             
+             metrics["test/comparison_video"] = save_path
              
              # Visualize particles using Pyrender for debug
              qqtt_cfg.WH = (width, height)
