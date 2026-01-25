@@ -20,6 +20,8 @@ def parse_args():
                         help="Path to output CSV file")
     parser.add_argument("--ep_idx", type=int, default=None,
                         help="Specific episode index to evaluate")
+    parser.add_argument("--no_wandb", action="store_true",
+                        help="Skip WandB logging")
     return parser.parse_args()
 
 
@@ -29,7 +31,8 @@ base_path = args.base_path
 output_file = args.output_file
 
 if args.ep_idx is not None and output_file == "results/chamfer_results.csv":
-    output_file = f"results/episode_{args.ep_idx}_chamfer.csv"
+    obj_name = os.path.basename(args.base_path.rstrip("/"))
+    output_file = f"results/{obj_name}_ep_{args.ep_idx}_chamfer.csv"
 
 os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
 
@@ -55,15 +58,20 @@ def evaluate_prediction(
         object_motions_valid = torch.tensor(object_motions_valid, dtype=torch.bool)
 
     for frame_idx in range(start_frame, end_frame):
+        if frame_idx >= len(vertices) or frame_idx >= len(object_points):
+            break
+            
         x = vertices[frame_idx]
         current_object_points = object_points[frame_idx]
         current_object_visibilities = object_visibilities[frame_idx]
-        # The motion valid indicates if the tracking is valid from prev_frame
-        current_object_motions_valid = object_motions_valid[frame_idx - 1]
-
+        
         # Compute the single-direction chamfer loss for the object points
         chamfer_object_points = current_object_points[current_object_visibilities]
         chamfer_x = x[:num_surface_points]
+        
+        if len(chamfer_object_points) == 0 or len(chamfer_x) == 0:
+            continue
+            
         # The GT chamfer_object_points can be partial,first find the nearest in second
         chamfer_error = chamfer_distance(
             chamfer_object_points.unsqueeze(0),
@@ -73,6 +81,12 @@ def evaluate_prediction(
         )[0]
 
         chamfer_errors.append(chamfer_error.item())
+
+    if len(chamfer_errors) == 0:
+        return {
+            "frame_len": 0,
+            "chamfer_error": 0.0,
+        }
 
     chamfer_errors = np.array(chamfer_errors)
 
@@ -151,6 +165,11 @@ if __name__ == "__main__":
         num_frames = min(vertices.shape[0], object_points.shape[0])
         print(f"Eval frames: {num_frames} (Split says: {split['test'][1]})")
 
+        if num_frames == 0:
+            print(f"Skipping {case_name} since num_frames is 0")
+            writer.writerow([case_name, 0, 0.0, 0, 0.0])
+            continue
+
         valid_train_frame = min(train_frame, num_frames)
         valid_test_frame = min(test_frame, num_frames)
 
@@ -187,7 +206,7 @@ if __name__ == "__main__":
         )
 
         # WandB logging
-        if args.ep_idx is not None:
+        if args.ep_idx is not None and not args.no_wandb:
             # Infer object name from base_path
             obj_name = os.path.basename(base_path)
             run_name = f"{obj_name}_ep_{args.ep_idx}"

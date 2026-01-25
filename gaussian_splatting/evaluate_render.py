@@ -42,7 +42,8 @@ from gaussian_splatting.scene.gaussian_model import GaussianModel
 from gaussian_splatting.scene.cameras import Camera
 from gaussian_splatting.gaussian_renderer import render
 from gaussian_splatting.dynamic_utils import (
-    get_topk_indices, knn_weights_sparse, interpolate_motions_speedup, calc_weights_vals_from_indices
+    get_topk_indices, knn_weights_sparse, interpolate_motions_speedup, 
+    calc_weights_vals_from_indices, compute_bone_transforms, apply_bone_transforms_speedup
 )
 from gaussian_splatting.utils.graphics_utils import focal2fov, getWorld2View2, getProjectionMatrix
 
@@ -125,7 +126,7 @@ def create_camera_view(w2c, intrinsic, height, width, cam_id=0):
 def render_gaussians_lbs(gaussians, ctrl_pts, view, background, n_frames):
     """
     Render Gaussians with LBS deformation based on control point trajectories.
-    Uses chunked processing to avoid OOM.
+    Uses chunked processing to avoid OOM and precomputes weights for efficiency.
     
     Args:
         gaussians: GaussianModel with initial state
@@ -139,6 +140,9 @@ def render_gaussians_lbs(gaussians, ctrl_pts, view, background, n_frames):
     """
     rendered_frames = []
     
+    # Ensure we don't exceed trajectory length
+    n_frames = min(n_frames, len(ctrl_pts))
+    
     # Get initial Gaussian state
     xyz_0 = gaussians.get_xyz.clone()
     quat_0 = gaussians.get_rotation.clone()
@@ -148,51 +152,65 @@ def render_gaussians_lbs(gaussians, ctrl_pts, view, background, n_frames):
     current_rot = quat_0.clone()
     
     # Initialize LBS relations (computed once from first control points)
+    # Optimized get_topk_indices avoids OOM on large particle sets
     init_particle_pos = ctrl_pts[0]
     relations = get_topk_indices(init_particle_pos, K=16)
     
-    # Chunk size for processing to avoid OOM (same as gs_render_dynamics.py)
+    # Chunk size for processing
     chunk_size = 20_000
     n_gaussians = len(current_pos)
     num_chunks = (n_gaussians + chunk_size - 1) // chunk_size
     
+    # PRECOMPUTE weights and indices for all Gaussian chunks
+    # This saves massive amounts of memory and time during the frame loop
+    all_weights = []
+    all_weights_indices = []
+    
+    print("Precomputing LBS weights for Gaussians...")
+    for j in tqdm(range(num_chunks), desc="Weight precomputation"):
+        start = j * chunk_size
+        end = min((j + 1) * chunk_size, n_gaussians)
+        pos_chunk = xyz_0[start:end]
+        
+        # Compute weights relative to initial pose
+        weights, weights_indices = knn_weights_sparse(init_particle_pos, pos_chunk, K=16)
+        all_weights.append(weights.cpu())
+        all_weights_indices.append(weights_indices.cpu())
+        
+        del weights, weights_indices
+        torch.cuda.empty_cache()
+
     for frame_idx in tqdm(range(n_frames), desc="Rendering with LBS"):
         if frame_idx > 0:
-            # Apply LBS deformation in chunks
+            # Apply LBS deformation
             prev_particle_pos = ctrl_pts[frame_idx - 1]
             cur_particle_pos = ctrl_pts[frame_idx]
+            
+            # 1. Compute bone transformations ONCE per frame
+            motions = cur_particle_pos - prev_particle_pos
+            bone_transforms = compute_bone_transforms(prev_particle_pos, motions, relations)
             
             for j in range(num_chunks):
                 start = j * chunk_size
                 end = min((j + 1) * chunk_size, n_gaussians)
                 
-                pos_chunk = current_pos[start:end].clone()
-                rot_chunk = current_rot[start:end].clone()
+                pos_chunk = current_pos[start:end]
+                rot_chunk = current_rot[start:end]
                 
-                # Compute KNN weights for this chunk (sparse version - computed once per chunk)
-                if frame_idx == 1:
-                    # Compute weight indices once from initial positions
-                    pass  # Will compute below
+                # Use precomputed weights for this chunk
+                weights = all_weights[j].to("cuda")
+                weights_indices = all_weights_indices[j].to("cuda")
                 
-                # Use sparse weights for memory efficiency
-                weights, weights_indices = knn_weights_sparse(prev_particle_pos, pos_chunk, K=16)
-                
-                # Interpolate motions for this chunk using speedup version
-                new_pos, new_rot, _ = interpolate_motions_speedup(
-                    bones=prev_particle_pos,
-                    motions=cur_particle_pos - prev_particle_pos,
-                    relations=relations,
-                    weights=weights,
-                    weights_indices=weights_indices,
-                    xyz=pos_chunk,
-                    quat=rot_chunk,
+                # Apply transformations to this chunk
+                new_pos, new_rot = apply_bone_transforms_speedup(
+                    pos_chunk, rot_chunk, prev_particle_pos, bone_transforms, weights, weights_indices
                 )
                 
                 current_pos[start:end] = new_pos
                 current_rot[start:end] = new_rot
                 
-                # Clean up intermediate tensors
-                del weights, weights_indices, pos_chunk, rot_chunk, new_pos, new_rot
+                # Intermediate cleanup
+                del weights, weights_indices, new_pos, new_rot
         
         # Update Gaussian positions
         gaussians._xyz = current_pos
@@ -201,7 +219,7 @@ def render_gaussians_lbs(gaussians, ctrl_pts, view, background, n_frames):
         # Render
         with torch.no_grad():
             results = render(view, gaussians, None, background)
-            rendering = results["render"]  # (3, H, W) or (4, H, W)
+            rendering = results["render"]
             
             # Convert to numpy immediately to free GPU memory
             if rendering.shape[0] == 4:
@@ -212,7 +230,6 @@ def render_gaussians_lbs(gaussians, ctrl_pts, view, background, n_frames):
             image = (image.clip(0, 1) * 255).astype(np.uint8)
             rendered_frames.append(image)
             
-            # Clean up render results
             del results, rendering
         
         # Periodically clear GPU cache
@@ -279,6 +296,8 @@ def parse_args():
                         help="Skip LBS rendering and use pre-rendered inference.mp4")
     parser.add_argument("--ep_idx", type=int, default=None,
                         help="Specific episode index to evaluate")
+    parser.add_argument("--no_wandb", action="store_true",
+                        help="Skip WandB logging")
     return parser.parse_args()
 
 
@@ -323,7 +342,8 @@ def main():
     output_file = args.output_file
     
     if args.ep_idx is not None and output_file == "results/render_results.csv":
-        output_file = f"results/episode_{args.ep_idx}_render.csv"
+        obj_name = os.path.basename(args.base_path.rstrip("/"))
+        output_file = f"results/{obj_name}_ep_{args.ep_idx}_render.csv"
 
     os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
     
@@ -553,7 +573,8 @@ def main():
             
             # Save comparison video
             output_dir = os.path.dirname(output_file) or "."
-            debug_video_path = os.path.join(output_dir, f"{case_name}_comparison.mp4")
+            obj_name = os.path.basename(args.base_path.rstrip("/"))
+            debug_video_path = os.path.join(output_dir, f"{obj_name}_ep_{args.ep_idx}_comparison.mp4")
             save_comparison_video(gt_frames, pred_frames, debug_video_path)
             
             # Calculate metrics
@@ -572,7 +593,7 @@ def main():
             file.flush()
 
             # WandB logging
-            if args.ep_idx is not None:
+            if args.ep_idx is not None and not args.no_wandb:
                 # Infer object name from base_path
                 obj_name = os.path.basename(base_path)
                 run_name = f"{obj_name}_ep_{args.ep_idx}"
@@ -588,7 +609,7 @@ def main():
                     "test/psnr": test_metrics['psnr'],
                     "test/ssim": test_metrics['ssim'],
                     "test/lpips": test_metrics['lpips'],
-                    "eval/comparison_video": wandb.Video(debug_video_path, fps=30, format="mp4")
+                    "test/comparison_video": wandb.Video(debug_video_path, fps=30, format="mp4")
                 })
     
     if wandb.run is not None:

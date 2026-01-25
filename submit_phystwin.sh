@@ -3,14 +3,14 @@ set -euo pipefail
 umask 002
 
 # if hpc_log folder does not exist, create it
-if [ ! -d "hpc_log" ]; then
-    mkdir -p hpc_log
+if [ ! -d "hpc_dynamics_log" ]; then
+    mkdir -p hpc_dynamics_log
 fi
 
 PROCESSED_DIR="/oscar/data/gdk/hli230/projects/vitac-particle/processed"
-# OBJ_NAMES=$(ls "${PROCESSED_DIR}")
+OBJ_NAMES=$(ls "${PROCESSED_DIR}")
 # hard code the object name
-OBJ_NAMES="001-rope"
+# OBJ_NAMES="001-rope"
 
 for OBJ in $OBJ_NAMES; do
     # Skip non-directory files if any
@@ -18,19 +18,32 @@ for OBJ in $OBJ_NAMES; do
         continue
     fi
     
-    # Find all episode directories and extract indices
+    # Find all episode directories and extract indices, skipping those already completed
     # This assumes episode directories are named 'episode_X'
-    EP_INsDICES=$(ls -d "${PROCESSED_DIR}/${OBJ}"/episode_* 2>/dev/null | sed 's/.*_//' | sort -n | uniq | tr '\n' ',' | sed 's/,$//')
+    EP_INDICES=""
+    for ep_dir in "${PROCESSED_DIR}/${OBJ}"/episode_*; do
+        if [ -d "$ep_dir" ]; then
+            EP_IDX=$(echo "$ep_dir" | sed 's/.*_//')
+            INF_FILE="${PROCESSED_DIR}/${OBJ}/experiments/episode_${EP_IDX}/inference.pkl"
+            if [ ! -f "$INF_FILE" ]; then
+                if [ -z "$EP_INDICES" ]; then
+                    EP_INDICES="$EP_IDX"
+                else
+                    EP_INDICES="${EP_INDICES},${EP_IDX}"
+                fi
+            fi
+        fi
+    done
     
     if [ -z "$EP_INDICES" ]; then
-        echo "No episodes found for ${OBJ}, skipping."
+        echo "All episodes for ${OBJ} are already processed or no episodes found, skipping."
         continue
     fi
 
     job_script="hpc_dynamics_log/phystwin_${OBJ}.sh"
     cat > "$job_script" <<EOT
 #!/bin/bash
-#SBATCH --job-name=phystwin_${OBJ}
+#SBATCH --job-name=${OBJ}_dyn
 #SBATCH --array=${EP_INDICES}
 #SBATCH --nodes=1
 #SBATCH --time=4:00:00
@@ -53,9 +66,7 @@ cd /oscar/data/gdk/hli230/projects/PhysTwin
 pixi run python script_optimize.py --base_path "\$DATA_PATH" --ep_idx \$EP_IDX --no-gui
 pixi run python script_train.py --base_path "\$DATA_PATH" --ep_idx \$EP_IDX --no-gui
 pixi run python script_inference.py --base_path "\$DATA_PATH" --ep_idx \$EP_IDX
-pixi run python evaluate_chamfer.py --base_path "\$DATA_PATH" --prediction_dir "\$DATA_PATH/experiments" --ep_idx \$EP_IDX
-pixi run python evaluate_track.py --base_path "\$DATA_PATH" --prediction_dir "\$DATA_PATH/experiments" --ep_idx \$EP_IDX
-pixi run python gaussian_splatting/evaluate_render.py --base_path "\$DATA_PATH" --prediction_dir "\$DATA_PATH/experiments" --ep_idx \$EP_IDX
+pixi run python evaluate_all.py --base_path "\$DATA_PATH" --prediction_dir "\$DATA_PATH/experiments" --ep_idx \$EP_IDX
 EOT
 
     chmod +x "$job_script"

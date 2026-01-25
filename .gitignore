@@ -1,6 +1,6 @@
 .pixi/
 brics_log/
-hpc_log/
+hpc_dynamics_log/
 test.py
 wandb/
 experiments/

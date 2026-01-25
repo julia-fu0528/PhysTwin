@@ -19,6 +19,8 @@ def parse_args():
                         help="Path to output CSV file")
     parser.add_argument("--ep_idx", type=int, default=None,
                         help="Specific episode index to evaluate")
+    parser.add_argument("--no_wandb", action="store_true",
+                        help="Skip WandB logging")
     return parser.parse_args()
 
 
@@ -28,7 +30,8 @@ prediction_path = args.prediction_dir
 output_file = args.output_file
 
 if args.ep_idx is not None and output_file == "results/track_results.csv":
-    output_file = f"results/episode_{args.ep_idx}_track.csv"
+    obj_name = os.path.basename(args.base_path.rstrip("/"))
+    output_file = f"results/{obj_name}_ep_{args.ep_idx}_track.csv"
 
 os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
 
@@ -37,17 +40,21 @@ def evaluate_prediction(start_frame, end_frame, vertices, gt_track_3d, idx, mask
     track_errors = []
     for frame_idx in range(start_frame, end_frame):
         # Get the new mask and see
-        if frame_idx >= len(gt_track_3d):
+        if frame_idx >= len(gt_track_3d) or frame_idx >= len(vertices):
             break
         new_mask = ~np.isnan(gt_track_3d[frame_idx][mask]).any(axis=1)
         gt_track_points = gt_track_3d[frame_idx][mask][new_mask]
         pred_x = vertices[frame_idx][idx][new_mask]
+        
         if len(pred_x) == 0:
-            track_error = 0
+            continue
         else:
             track_error = np.mean(np.linalg.norm(pred_x - gt_track_points, axis=1))
         
         track_errors.append(track_error)
+        
+    if len(track_errors) == 0:
+        return 0.0
     return np.mean(track_errors)
 
 
@@ -99,12 +106,22 @@ for dir_name in dir_names:
 
     # Locate the index of corresponding point index in the vertices, if nan, then ignore the points
     mask = ~np.isnan(gt_track_3d[0]).any(axis=1)
+    
+    if not mask.any():
+        print(f"Skipping {case_name} since all GT points in first frame are NaN")
+        writer.writerow([case_name, 0.0, 0.0])
+        continue
 
     kdtree = KDTree(vertices[0])
     dis, idx = kdtree.query(gt_track_3d[0][mask])
 
     num_frames = min(len(vertices), len(gt_track_3d))
     print(f"Eval frames: {num_frames} (Split says: {split['test'][1]})")
+
+    if num_frames == 0:
+        print(f"Skipping {case_name} since num_frames is 0")
+        writer.writerow([case_name, 0.0, 0.0])
+        continue
 
     valid_train_frame = min(train_frame, num_frames)
     valid_test_frame = min(test_frame, num_frames)
@@ -118,7 +135,7 @@ for dir_name in dir_names:
     writer.writerow([case_name, train_track_error, test_track_error])
 
     # WandB logging
-    if args.ep_idx is not None:
+    if args.ep_idx is not None and not args.no_wandb:
         # Infer object name from base_path
         obj_name = os.path.basename(base_path)
         run_name = f"{obj_name}_ep_{args.ep_idx}"

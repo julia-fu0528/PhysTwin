@@ -245,26 +245,48 @@ def create_relation_matrix(points, K=5):
     return relation_matrix
 
 
-def get_topk_indices(points, K=5):
+def get_topk_indices(points, K=5, chunk_size=10000):
     """
     Compute the indices of the top K closest neighbors for each point.
+    Optimized to avoid OOM for large point sets.
 
     Args:
         points (torch.Tensor): Tensor of shape (N, 3) representing 3D points.
         K (int): Number of closest neighbors to retrieve.
+        chunk_size (int): Size of chunks for processing to avoid OOM.
 
     Returns:
         torch.Tensor: Tensor of shape (N, K) containing the indices of the top K closest neighbors.
     """
-    # Compute pairwise squared Euclidean distances
-    dist_matrix = torch.cdist(points, points, p=2)  # (N, N)
-
-    # Get the indices of the top K closest neighbors (excluding self)
-    topk_indices = torch.topk(dist_matrix, K + 1, largest=False).indices[:, 1:]  # Skip self (0 distance)
-
-    return topk_indices
-
-
+    N = points.shape[0]
+    device = points.device
+    
+    # For small N, use direct computation
+    if N <= chunk_size:
+        dist_matrix = torch.cdist(points, points, p=2)  # (N, N)
+        topk_indices = torch.topk(dist_matrix, K + 1, largest=False).indices[:, 1:]  # Skip self
+        return topk_indices
+    
+    # For large N, compute in chunks
+    topk_indices_all = torch.zeros((N, K), dtype=torch.long, device=device)
+    
+    for i in range(0, N, chunk_size):
+        end_i = min(i + chunk_size, N)
+        query_points = points[i:end_i]
+        
+        # Compute distances from this chunk to all points
+        dist_chunk = torch.cdist(query_points, points, p=2)  # (chunk_size, N)
+        
+        # Get top K+1 (to exclude self if needed)
+        # Note: self index might not always be the 0-th because of precision or duplicates, 
+        # but for topk it's usually fine to just take from 1 on if query is in points.
+        chunk_topk = torch.topk(dist_chunk, K + 1, largest=False).indices[:, 1:]
+        topk_indices_all[i:end_i] = chunk_topk
+        
+        del dist_chunk
+        torch.cuda.empty_cache()
+        
+    return topk_indices_all
 def knn_weights(bones, pts, K=5):
     dist = torch.norm(pts[:, None] - bones, dim=-1)  # (n_pts, n_bones)
     _, indices = torch.topk(dist, K, dim=-1, largest=False)
@@ -273,10 +295,8 @@ def knn_weights(bones, pts, K=5):
     weights = 1 / (dist + 1e-6)
     weights = weights / weights.sum(dim=-1, keepdim=True)  # (N, k)
     weights_all = torch.zeros((pts.shape[0], bones.shape[0]), device=pts.device)  # TODO: prevent init new one
-    # weights_all[torch.arange(pts.shape[0])[:, None], indices] = weights
     weights_all[torch.arange(pts.shape[0], device=pts.device)[:, None], indices] = weights
     return weights_all
-
 
 
 def calc_weights_vals_from_indices(bones, pts, indices):
@@ -302,193 +322,168 @@ def knn_weights_sparse(bones, pts, K=5):
     torch.cuda.empty_cache()
     return weights_vals, indices
 
-def interpolate_motions_speedup(bones, motions, relations, xyz, rot=None, quat=None, weights=None, weights_indices=None, device='cuda', step='n/a'):
-    # bones: (n_bones, 3) bone positions
-    # motions: (n_bones, 3) bone motions/displacements
-    # relations: (n_bones, k_adj) bone adjacency relationships - which bones are connected to each other
-    # xyz: (n_particles, 3) particle positions
-    # weights: (n_particles, k) weights for k nearest bones per particle
-    # weights_indices: (n_particles, k) indices of k nearest bones per particle
-    # rot: (n_particles, 3, 3) optional rotation matrices
-    # quat: (n_particles, 4) optional quaternions
 
+
+def compute_bone_transforms(bones, motions, relations, device='cuda', step='n/a'):
+    """
+    Compute bone transformations (rotation + translation) from motions.
+    
+    Args:
+        bones: (n_bones, 3) bone positions
+        motions: (n_bones, 3) bone motions/displacements
+        relations: (n_bones, k_adj) bone adjacency relationships
+    
+    Returns:
+        bone_transforms: (n_bones, 4, 4) transformation matrices
+    """
     n_bones, _ = bones.shape
-    n_particles, k_nearest = xyz.shape
-
-    # Compute the bone transformations
-    bone_transforms = torch.zeros((n_bones, 4, 4),  device=device)
-
+    bone_transforms = torch.zeros((n_bones, 4, 4), device=device)
     n_adj = relations.shape[1]
     
     adj_bones = bones[relations] - bones[:, None]  # (n_bones, n_adj, 3)
     adj_bones_new = (bones[relations] + motions[relations]) - (bones[:, None] + motions[:, None])  # (n_bones, n_adj, 3)
 
     W = torch.eye(n_adj, device=device)[None].repeat(n_bones, 1, 1)  # (n_bones, n_adj, n_adj)
-
-    # fit a transformation
     F = adj_bones_new.permute(0, 2, 1) @ W @ adj_bones  # (n_bones, 3, 3)
     
     cov_rank = torch.linalg.matrix_rank(F)  # (n_bones,)
-    
-    cov_rank_3_mask = cov_rank == 3  # (n_bones,)
-    cov_rank_2_mask = cov_rank == 2  # (n_bones,)
-    cov_rank_1_mask = cov_rank == 1  # (n_bones,)
+    cov_rank_3_mask = cov_rank == 3
+    cov_rank_2_mask = cov_rank == 2
+    cov_rank_1_mask = cov_rank == 1
 
-    F_2_3 = F[cov_rank_2_mask | cov_rank_3_mask]  # (n_bones, 3, 3)
-    F_1 = F[cov_rank_1_mask]  # (n_bones, 3, 3)
+    F_2_3 = F[cov_rank_2_mask | cov_rank_3_mask]
+    F_1 = F[cov_rank_1_mask]
 
-    # 2 or 3
-    try:
-        U, S, V = torch.svd(F_2_3)  # S: (n_bones, 3)
-        S = torch.eye(3, device=device, dtype=torch.float32)[None].repeat(F_2_3.shape[0], 1, 1)
-        neg_det_mask = torch.linalg.det(F_2_3) < 0
-        if neg_det_mask.sum() > 0:
-            print(f'[step {step}] F det < 0 for {neg_det_mask.sum()} bones')
-            S[neg_det_mask, -1, -1] = -1  # S[:, -1, -1] or S[:, cov_rank, cov_rank] or S[:, cov_rank - 1, cov_rank - 1]?
-        R = U @ S @ V.permute(0, 2, 1)
-    except:
-        print(f'[step {step}] SVD failed')
-        import ipdb; ipdb.set_trace()
+    # Handle Rank 2 and 3
+    if F_2_3.shape[0] > 0:
+        try:
+            U, S, V = torch.svd(F_2_3)
+            S = torch.eye(3, device=device, dtype=torch.float32)[None].repeat(F_2_3.shape[0], 1, 1)
+            neg_det_mask = torch.linalg.det(F_2_3) < 0
+            if neg_det_mask.sum() > 0:
+                # print(f'[step {step}] F det < 0 for {neg_det_mask.sum()} bones')
+                S[neg_det_mask, -1, -1] = -1
+            R = U @ S @ V.permute(0, 2, 1)
+            
+            neg_1_det_mask = torch.abs(torch.linalg.det(R) + 1) < 1e-3
+            if neg_1_det_mask.sum() > 0:
+                S[neg_1_det_mask, -1, -1] *= -1
+                R = U @ S @ V.permute(0, 2, 1)
+                
+            bone_transforms[cov_rank_2_mask | cov_rank_3_mask, :3, :3] = R
+        except Exception as e:
+            print(f'[step {step}] SVD failed for Rank 2/3: {e}')
+            bone_transforms[cov_rank_2_mask | cov_rank_3_mask, :3, :3] = torch.eye(3, device=device).repeat(F_2_3.shape[0], 1, 1)
 
-    neg_1_det_mask = torch.abs(torch.linalg.det(R) + 1) < 1e-3
-    pos_1_det_mask = torch.abs(torch.linalg.det(R) - 1) < 1e-3
-    bad_det_mask = ~(neg_1_det_mask | pos_1_det_mask)
-
-    if neg_1_det_mask.sum() > 0:
-        print(f'[step {step}] det -1')
-        S[neg_1_det_mask, -1, -1] *= -1  # S[:, -1, -1] or S[:, cov_rank, cov_rank] or S[:, cov_rank - 1, cov_rank - 1]?
-        R = U @ S @ V.permute(0, 2, 1)
-
-    try:
-        assert bad_det_mask.sum() == 0
-    except:
-        print(f'[step {step}] Bad det')
-        import ipdb; ipdb.set_trace()
-
-    try:
-        if cov_rank_1_mask.sum() > 0:
-            print(f'[step {step}] F rank 1 for {cov_rank_1_mask.sum()} bones')
-            U, S, V = torch.svd(F_1)  # S: (n_bones', 3)
-            assert torch.allclose(S[:, 1:], torch.zeros_like(S[:, 1:]))
-            x = torch.tensor([1., 0., 0.], device=device, dtype=torch.float32)[None].repeat(F_1.shape[0], 1)  # (n_bones', 3)
-            axis = U[:, :, 0]  # (n_bones', 3)
-            perp_axis = torch.linalg.cross(axis, x)  # (n_bones', 3)
-
+    # Handle Rank 1
+    if F_1.shape[0] > 0:
+        try:
+            U, S, V = torch.svd(F_1)
+            x = torch.tensor([1., 0., 0.], device=device, dtype=torch.float32)[None].repeat(F_1.shape[0], 1)
+            axis = U[:, :, 0]
+            perp_axis = torch.linalg.cross(axis, x)
             perp_axis_norm_mask = torch.norm(perp_axis, dim=1) < 1e-6
+            
+            R = torch.eye(3, device=device).repeat(F_1.shape[0], 1, 1)
+            
+            valid_mask = ~perp_axis_norm_mask
+            if valid_mask.sum() > 0:
+                perp_axis_valid = perp_axis[valid_mask] / torch.norm(perp_axis[valid_mask], dim=1, keepdim=True)
+                x_valid = x[valid_mask]
+                axis_valid = axis[valid_mask]
+                
+                third_axis = torch.linalg.cross(x_valid, perp_axis_valid)
+                third_axis_after = torch.linalg.cross(axis_valid, perp_axis_valid)
+                
+                X = torch.stack([x_valid, perp_axis_valid, third_axis], dim=-1)
+                Y = torch.stack([axis_valid, perp_axis_valid, third_axis_after], dim=-1)
+                R[valid_mask] = Y @ X.permute(0, 2, 1)
+            
+            bone_transforms[cov_rank_1_mask, :3, :3] = R
+        except Exception as e:
+            print(f'[step {step}] Rank 1 processing failed: {e}')
+            bone_transforms[cov_rank_1_mask, :3, :3] = torch.eye(3, device=device).repeat(F_1.shape[0], 1, 1)
 
-            R = torch.zeros((F_1.shape[0], 3, 3), device=device, dtype=torch.float32)
-            if perp_axis_norm_mask.sum() > 0:
-                print(f'[step {step}] Perp axis norm 0 for {perp_axis_norm_mask.sum()} bones')
-                R[perp_axis_norm_mask] = torch.eye(3, device=device, dtype=torch.float32)[None].repeat(perp_axis_norm_mask.sum(), 1, 1)
+    # If rank is 0 or anything else, default to identity
+    cov_rank_0_mask = (cov_rank == 0)
+    if cov_rank_0_mask.sum() > 0:
+        bone_transforms[cov_rank_0_mask, :3, :3] = torch.eye(3, device=device).repeat(cov_rank_0_mask.sum(), 1, 1)
 
-            perp_axis = perp_axis[~perp_axis_norm_mask]  # (n_bones', 3)
-            x = x[~perp_axis_norm_mask]  # (n_bones', 3)
-
-            perp_axis = perp_axis / torch.norm(perp_axis, dim=1, keepdim=True)  # (n_bones', 3)
-            third_axis = torch.linalg.cross(x, perp_axis)  # (n_bones', 3)
-            assert ((torch.norm(third_axis, dim=1) - 1).abs() < 1e-6).all()
-            third_axis_after = torch.linalg.cross(axis, perp_axis)  # (n_bones', 3)
-
-            X = torch.stack([x, perp_axis, third_axis], dim=-1)
-            Y = torch.stack([axis, perp_axis, third_axis_after], dim=-1)
-            R[~perp_axis_norm_mask] = Y @ X.permute(0, 2, 1)
-    except:
-        R = torch.zeros((F_1.shape[0], 3, 3), device=device, dtype=torch.float32)
-        R[:, 0, 0] = 1
-        R[:, 1, 1] = 1
-        R[:, 2, 2] = 1
-
-    try:
-        bone_transforms[:, :3, :3] = R
-    except:
-        print(f'[step {step}] Bad R')
-        bone_transforms[:, 0, 0] = 1
-        bone_transforms[:, 1, 1] = 1
-        bone_transforms[:, 2, 2] = 1
     bone_transforms[:, :3, 3] = motions
+    bone_transforms[:, 3, 3] = 1.0
+    return bone_transforms
 
-    # Compute the weights
-    # if weights is None:
-    #     weights = torch.ones((n_particles, n_bones), device=device)
 
-    #     dist = torch.cdist(xyz[None], bones[None])[0]  # (n_particles, n_bones)
-    #     dist = torch.clamp(dist, min=1e-4)
-    #     weights = 1 / dist
-    #     # weights_topk = torch.topk(weights, 5, dim=1, largest=True, sorted=True)
-    #     # weights[weights < weights_topk.values[:, -1:]] = 0.
-    #     weights = weights / weights.sum(dim=1, keepdim=True)  # (n_particles, n_bones)
-    #     # weights[weights < 0.01] = 0.
-    #     # weights = weights / weights.sum(dim=1, keepdim=True)  # (n_particles, n_bones)
+def apply_bone_transforms_speedup(xyz, quat, bones, bone_transforms, weights, weights_indices):
+    """
+    Apply precomputed bone transformations using sparse weights.
     
-    # Compute the transformed particles
-    # xyz_transformed = torch.zeros((n_particles, n_bones, 3), device=device)
-
-    # xyz_transformed = xyz[:, None] - bones[None]  # (n_particles, n_bones, 3)
-    # # xyz_transformed = (bone_transforms[:, :3, :3][None].repeat(n_particles, 1, 1, 1)\
-    # #         .reshape(n_particles * n_bones, 3, 3) @ xyz_transformed.reshape(n_particles * n_bones, 3, 1)).reshape(n_particles, n_bones, 3)
-    # xyz_transformed = torch.einsum('ijk,jkl->ijl', xyz_transformed, bone_transforms[:, :3, :3].permute(0, 2, 1))  # (n_particles, n_bones, 3)
-    # xyz_transformed = xyz_transformed + bone_transforms[:, :3, 3][None] + bones[None]  # (n_particles, n_bones, 3)
-    # xyz_transformed = (xyz_transformed * weights[:, :, None]).sum(dim=1)  # (n_particles, 3)
-
-
+    Args:
+        xyz: (n_particles, 3) 
+        quat: (n_particles, 4)
+        bones: (n_bones, 3) positions
+        bone_transforms: (n_bones, 4, 4)
+        weights: (n_particles, k)
+        weights_indices: (n_particles, k)
+    
+    Returns:
+        xyz_transformed: (n_particles, 3)
+        rot_transformed: (n_particles, 4)
+    """
     selected_bones = bones[weights_indices]  # (n_particles, k, 3)
     selected_transforms = bone_transforms[weights_indices]  # (n_particles, k, 4, 4)
 
-    # Transform each point with only its k nearest bones
-    # xyz_expanded = xyz[:, None].unsqueeze(1).expand(-1, k_nearest, -1)  # (n_particles, k, 3)
-    # xyz_local = xyz_expanded - selected_bones  # (n_particles, k, 3)
+    # Transform positions
     xyz_local = xyz.unsqueeze(1) - selected_bones  # (n_particles, k, 3)
-    
-    # Apply rotation to local coordinates 
     rotated_local = torch.einsum('nkij,nkj->nki', selected_transforms[:, :, :3, :3], xyz_local)  # (n_particles, k, 3)
-    
-    # Apply translation and add back bone positions
     transformed_pts = rotated_local + selected_transforms[:, :, :3, 3] + selected_bones  # (n_particles, k, 3)
-    
-    # Apply weights to get final positions
     xyz_transformed = torch.sum(transformed_pts * weights[:, :, None], dim=1)  # (n_particles, 3)
 
-
-    def quaternion_multiply(q1, q2):
-        # q1: bsz x 4
-        # q2: bsz x 4
-        q = torch.zeros_like(q1)
-        q[:, 0] = q1[:, 0] * q2[:, 0] - q1[:, 1] * q2[:, 1] - q1[:, 2] * q2[:, 2] - q1[:, 3] * q2[:, 3]
-        q[:, 1] = q1[:, 0] * q2[:, 1] + q1[:, 1] * q2[:, 0] + q1[:, 2] * q2[:, 3] - q1[:, 3] * q2[:, 2]
-        q[:, 2] = q1[:, 0] * q2[:, 2] - q1[:, 1] * q2[:, 3] + q1[:, 2] * q2[:, 0] + q1[:, 3] * q2[:, 1]
-        q[:, 3] = q1[:, 0] * q2[:, 3] + q1[:, 1] * q2[:, 2] - q1[:, 2] * q2[:, 1] + q1[:, 3] * q2[:, 0]
-        return q
-
+    # Transform rotations
+    rot_transformed = quat
     if quat is not None:
-        # base_quats = kornia.geometry.conversions.rotation_matrix_to_quaternion(bone_transforms[:, :3, :3])  # (n_bones, 4)
-        # base_quats = mat2quat(bone_transforms[:, :3, :3])  # (n_bones, 4)
-        # base_quats = torch.nn.functional.normalize(base_quats, dim=-1)  # (n_particles, 4)
-        # quats = (base_quats[None] * weights[:, :, None]).sum(dim=1)  # (n_particles, 4)
-        # quats = torch.nn.functional.normalize(quats, dim=-1)
-
         from kornia.geometry.conversions import rotation_matrix_to_quaternion
-
+        
         selected_rot_matrices = selected_transforms[:, :, :3, :3]  # (n_particles, k, 3, 3)
-        n_particles, k_weights = weights_indices.shape
-        batch_rot_matrices = selected_rot_matrices.reshape(-1, 3, 3)  # (n_particles*k, 3, 3)
+        n_p, k_w = weights_indices.shape
+        batch_rot_matrices = selected_rot_matrices.reshape(-1, 3, 3)
         
         try:
-            base_quats = rotation_matrix_to_quaternion(batch_rot_matrices)  # (n_particles*k, 4)
+            base_quats = rotation_matrix_to_quaternion(batch_rot_matrices)
         except:
-            print('use mat2quat')
-            base_quats = mat2quat(batch_rot_matrices)  # (n_particles*k, 4)
+            base_quats = mat2quat(batch_rot_matrices)
             
-        base_quats = base_quats.reshape(n_particles, k_weights, 4)  # (n_particles, k, 4)
+        base_quats = base_quats.reshape(n_p, k_w, 4)
         base_quats = torch.nn.functional.normalize(base_quats, dim=-1)
-        quats = torch.sum(base_quats * weights[:, :, None], dim=1)  # (n_particles, 4)
-        quats = torch.nn.functional.normalize(quats, dim=-1)
+        
+        # Weighted average of quaternions
+        # Note: Simple weighted average followed by normalization is an approximation of slerp
+        avg_quats = torch.sum(base_quats * weights[:, :, None], dim=1)
+        avg_quats = torch.nn.functional.normalize(avg_quats, dim=-1)
 
-        rot = quaternion_multiply(quats, quat)
+        def quaternion_multiply(q1, q2):
+            q = torch.zeros_like(q1)
+            q[:, 0] = q1[:, 0] * q2[:, 0] - q1[:, 1] * q2[:, 1] - q1[:, 2] * q2[:, 2] - q1[:, 3] * q2[:, 3]
+            q[:, 1] = q1[:, 0] * q2[:, 1] + q1[:, 1] * q2[:, 0] + q1[:, 2] * q2[:, 3] - q1[:, 3] * q2[:, 2]
+            q[:, 2] = q1[:, 0] * q2[:, 2] - q1[:, 1] * q2[:, 3] + q1[:, 2] * q2[:, 0] + q1[:, 3] * q2[:, 1]
+            q[:, 3] = q1[:, 0] * q2[:, 3] + q1[:, 1] * q2[:, 2] - q1[:, 2] * q2[:, 1] + q1[:, 3] * q2[:, 0]
+            return q
 
+        rot_transformed = quaternion_multiply(avg_quats, quat)
+
+    return xyz_transformed, rot_transformed
+
+
+def interpolate_motions_speedup(bones, motions, relations, xyz, rot=None, quat=None, weights=None, weights_indices=None, device='cuda', step='n/a'):
+    # Keep original function signature for backward compatibility
+    # but use the new refactored functions
+    
+    bone_transforms = compute_bone_transforms(bones, motions, relations, device=device, step=step)
+    
+    xyz_transformed, quat_transformed = apply_bone_transforms_speedup(
+        xyz, quat, bones, bone_transforms, weights, weights_indices
+    )
+    
     # Return sparse weights representation for reuse
     weights_sparse = (weights, weights_indices)
-
-    # xyz_transformed: (n_particles, 3)
-    # rot: (n_particles, 3, 3) / (n_particles, 4)
-    # weights: (n_particles, n_bones)
-    return xyz_transformed, rot, weights_sparse
+    return xyz_transformed, quat_transformed, weights_sparse
