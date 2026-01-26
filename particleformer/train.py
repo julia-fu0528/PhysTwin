@@ -20,6 +20,7 @@ os.environ["PYOPENGL_PLATFORM"] = "egl"
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 from .config import ParticleFormerConfig
@@ -46,7 +47,7 @@ def parse_args():
     parser.add_argument(
         "--data_root",
         type=str,
-        default="/mnt/data/ParticleData/processed",
+        default="/oscar/data/gdk/hli230/projects/vitac-particle/processed",
         help="Root directory containing object data folders",
     )
     parser.add_argument(
@@ -104,7 +105,7 @@ def parse_args():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=8,
+        default=2,
         help="Batch size for training",
     )
     parser.add_argument(
@@ -150,8 +151,8 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="outputs/particleformer",
-        help="Output directory for checkpoints and logs",
+        default=None,
+        help="Output directory for checkpoints and logs (defaults to outputs/particleformer/{object}_ep{episode})",
     )
     parser.add_argument(
         "--log_interval",
@@ -173,7 +174,7 @@ def parse_args():
     parser.add_argument(
         "--wandb_project",
         type=str,
-        default="particleformer",
+        default="deformable_dynamics",
         help="Wandb project name",
     )
     
@@ -210,6 +211,10 @@ def parse_args():
 def main():
     """Main training entry point."""
     args = parse_args()
+    
+    # Update output_dir if not provided
+    if args.output_dir is None:
+        args.output_dir = os.path.join("outputs/particleformer", f"{args.object}_ep{args.episode}")
     
     # Load or create config
     if args.config is not None:
@@ -303,6 +308,12 @@ def main():
     # Start training
     print("Starting training...")
     trainer.train(train_dataloader, val_dataloader)
+    
+    # Cleanup output directory after training
+    if trainer.accelerator.is_main_process:
+        if os.path.exists(config.output_dir):
+            print(f"Cleaning up output directory: {config.output_dir}")
+            shutil.rmtree(config.output_dir)
 
 
 if __name__ == "__main__":

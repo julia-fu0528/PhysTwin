@@ -1,6 +1,7 @@
 outputs/
 .pixi/
 brics_log/
+hpc_particleformer_log/
 hpc_dynamics_log/
 test.py
 wandb/

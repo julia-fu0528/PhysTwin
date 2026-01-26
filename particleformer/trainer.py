@@ -484,6 +484,7 @@ class ParticleFormerTrainer:
         
         eval_episodes = 0
         max_eval_episodes = 5 
+        processed_episodes = set()
         
         for batch in dataloader:
             if eval_episodes >= max_eval_episodes:
@@ -495,6 +496,9 @@ class ParticleFormerTrainer:
             unique_paths = list(set(episode_paths))
             
             for ep_path in unique_paths:
+                if ep_path in processed_episodes:
+                    continue
+                    
                 if eval_episodes >= max_eval_episodes:
                     break
                 
@@ -654,6 +658,7 @@ class ParticleFormerTrainer:
                 
                 counts["render"] += 1
                 eval_episodes += 1
+                processed_episodes.add(ep_path)
         
         # Average metrics
         metrics = {}
