@@ -20,8 +20,10 @@ os.environ["PYOPENGL_PLATFORM"] = "egl"
 
 import argparse
 import json
+import pickle
 import shutil
 from pathlib import Path
+import torch
 
 from .config import ParticleFormerConfig
 from .trainer import ParticleFormerTrainer
@@ -67,6 +69,13 @@ def parse_args():
         type=str,
         default="split.json",
         help="Path to split.json file",
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="episode",
+        choices=["episode", "multi-episode"],
+        help="Training mode: 'episode' (single ep) or 'multi-episode' (eps 0-3 train, 4 test)",
     )
     
     # Model arguments
@@ -253,8 +262,44 @@ def main():
             mixed_precision=args.mixed_precision,
             seed=args.seed,
             resume_from=args.resume_from,
+            mode=args.mode,
         )
     
+    # Set train and test episodes based on mode
+    if config.mode == "multi-episode":
+        all_candidates = [0, 1, 2, 3, 4]
+        existing_episodes = []
+        for ep_id in all_candidates:
+            ep_path = Path(config.data_root) / config.object_name / f"episode_{ep_id}" / "final_data.pkl"
+            if ep_path.exists():
+                try:
+                    with open(ep_path, "rb") as f:
+                        data = pickle.load(f)
+                    if data["object_points"].shape[0] > config.rollout_steps:
+                        existing_episodes.append(ep_id)
+                    else:
+                        print(f"Warning: Episode {ep_id} is too short ({data['object_points'].shape[0]} frames) for rollout_steps={config.rollout_steps}. Skipping.")
+                except Exception as e:
+                    print(f"Warning: Could not read {ep_path}: {e}. Skipping.")
+        
+        if not existing_episodes:
+            raise ValueError(f"No valid episodes found in range 0-4 for {config.object_name} at {config.data_root} (all existed episodes were too short or missing)")
+            
+        # Last existing episode (<=4) for testing
+        test_ep = existing_episodes[-1]
+        config.test_episodes = [test_ep]
+        
+        # All remaining existing episodes (< testing) for training
+        config.train_episodes = [ep for ep in existing_episodes if ep < test_ep]
+        
+        # Fallback if only one episode exists
+        if not config.train_episodes:
+            print(f"Warning: Only one episode ({test_ep}) found in range 0-4. Using it for both training and testing.")
+            config.train_episodes = [test_ep]
+    else:
+        config.train_episodes = [args.episode]
+        config.test_episodes = [args.episode]
+
     print("=" * 60)
     print("ParticleFormer Training")
     print("=" * 60)
@@ -263,6 +308,9 @@ def main():
     
     # Create dataloaders
     print("Creating dataloaders...")
+    
+    # In multi-episode mode, we use the whole test episode for validation
+    val_split = "all" if config.mode == "multi-episode" else "test"
     
     # Make split_json path relative to workspace if not absolute
     split_path = Path(args.split_json)
@@ -281,8 +329,8 @@ def main():
         num_workers=args.num_workers,
         shuffle=True,
         split="train",
-        object_name=args.object,
-        episode_ids=[args.episode],
+        object_name=config.object_name,
+        episode_ids=config.train_episodes,
     )
     
     val_dataloader = create_dataloader(
@@ -292,9 +340,9 @@ def main():
         rollout_steps=config.rollout_steps,
         num_workers=args.num_workers,
         shuffle=False,
-        split="test",
-        object_name=args.object,
-        episode_ids=[args.episode],
+        split=val_split,
+        object_name=config.object_name,
+        episode_ids=config.test_episodes,
     )
     
     print(f"Training samples: {len(train_dataloader.dataset)}")
@@ -311,6 +359,18 @@ def main():
     
     # Cleanup output directory after training
     if trainer.accelerator.is_main_process:
+        # Save final checkpoint with custom name to data_root/object
+        ep_suffix = "_".join(map(str, config.train_episodes))
+        final_ckpt_name = f"train_ep_{ep_suffix}.ckpt"
+        final_ckpt_path = Path(config.data_root) / config.object_name / final_ckpt_name
+        
+        print(f"Saving final checkpoint to {final_ckpt_path}...")
+        final_ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Save model state dict
+        unwrapped_model = trainer.accelerator.unwrap_model(trainer.model)
+        torch.save(unwrapped_model.state_dict(), final_ckpt_path)
+        
         if os.path.exists(config.output_dir):
             print(f"Cleaning up output directory: {config.output_dir}")
             shutil.rmtree(config.output_dir)

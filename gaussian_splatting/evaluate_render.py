@@ -43,9 +43,11 @@ from gaussian_splatting.dynamic_utils import (
     calc_weights_vals_from_indices, compute_bone_transforms, apply_bone_transforms_speedup
 )
 from gaussian_splatting.utils.graphics_utils import focal2fov, getWorld2View2, getProjectionMatrix
+from gaussian_splatting.render_utils import calculate_metrics
 
 # Import from root-level modules
 from gs_render import remove_gaussians_with_low_opacity
+
 
 
 def img2tensor(img):

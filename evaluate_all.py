@@ -10,7 +10,9 @@ def parse_args():
     parser.add_argument("--base_path", type=str, required=True, help="Path to ground truth data")
     parser.add_argument("--prediction_dir", type=str, required=True, help="Path to experiment outputs")
     parser.add_argument("--ep_idx", type=int, required=True, help="Specific episode index to evaluate")
+    parser.add_argument("--cam_idx", type=int, default=0, help="Camera index to use for rendering evaluation (default: 0)")
     return parser.parse_args()
+
 
 def run_script(script_path, args_list):
     print(f"Running {script_path}...")
@@ -41,7 +43,7 @@ def main():
     track_script = os.path.join(root_dir, "evaluate_track.py")
     render_script = os.path.join(root_dir, "gaussian_splatting/evaluate_render.py")
     
-    # Common arguments
+    # Common arguments (for scripts that don't need camera index)
     common_args = [
         "--base_path", args.base_path,
         "--prediction_dir", args.prediction_dir,
@@ -49,11 +51,15 @@ def main():
         "--no_wandb"
     ]
     
+    # Render-specific arguments (includes camera index)
+    render_args = common_args + ["--cam_idx", str(args.cam_idx)]
+    
     # Run scripts
     success = True
     success &= run_script(chamfer_script, common_args)
     success &= run_script(track_script, common_args)
-    success &= run_script(render_script, common_args)
+    success &= run_script(render_script, render_args)
+
     
     if not success:
         print("Some evaluation scripts failed.")

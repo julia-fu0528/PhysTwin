@@ -124,13 +124,21 @@ class ParticleFormerTrainer:
         
         # Initialize wandb
         if config.use_wandb and self.accelerator.is_main_process:
-            run_name = f"{config.object_name}_ep_{config.ep_idx}"
+            if config.mode == "multi-episode":
+                ep_range = "_".join(map(str, config.train_episodes))
+                run_name = f"{config.object_name}_multi_ep_{ep_range}"
+            else:
+                run_name = f"{config.object_name}_ep_{config.ep_idx}"
+                
             self.accelerator.init_trackers(
                 project_name="deformable_dynamics",
                 config={
                     "method": "ParticleFormer",
                     "object_name": config.object_name,
                     "ep_idx": config.ep_idx,
+                    "mode": config.mode,
+                    "train_episodes": config.train_episodes,
+                    "test_episodes": config.test_episodes,
                     **config.__dict__
                 },
                 init_kwargs={

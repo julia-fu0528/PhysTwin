@@ -107,9 +107,12 @@ class ParticleDataset(Dataset):
                 if self.split == "train":
                     start_idx = 0
                     end_idx = train_range[1] - offset
-                else:
+                elif self.split == "test":
                     start_idx = test_range[0] - offset
                     end_idx = test_range[1] - offset
+                else:  # split == "all"
+                    start_idx = 0
+                    end_idx = object_points.shape[0]
                 
                 object_points = object_points[start_idx:end_idx]
                 controller_points = controller_points[start_idx:end_idx]

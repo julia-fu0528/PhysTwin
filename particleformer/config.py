@@ -43,6 +43,9 @@ class ParticleFormerConfig:
     split_json: str = "split.json"
     object_name: str = "001-rope"
     ep_idx: int = 0
+    mode: str = "episode"  # "episode" or "multi-episode"
+    train_episodes: List[int] = field(default_factory=list)
+    test_episodes: List[int] = field(default_factory=list)
     
     # Logging
     log_interval: int = 10
