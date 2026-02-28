@@ -10,7 +10,7 @@ def parse_args():
     parser.add_argument("--base_path", type=str, required=True, help="Path to ground truth data")
     parser.add_argument("--prediction_dir", type=str, required=True, help="Path to experiment outputs")
     parser.add_argument("--ep_idx", type=int, required=True, help="Specific episode index to evaluate")
-    parser.add_argument("--cam_idx", type=int, default=0, help="Camera index to use for rendering evaluation (default: 0)")
+    parser.add_argument("--cam_name", type=str, default=None, help="Camera name to use for rendering evaluation (e.g., 'brics-odroid-022_cam1'). Falls back to first camera if not specified or not found.")
     return parser.parse_args()
 
 
@@ -51,8 +51,10 @@ def main():
         "--no_wandb"
     ]
     
-    # Render-specific arguments (includes camera index)
-    render_args = common_args + ["--cam_idx", str(args.cam_idx)]
+    # Render-specific arguments (includes camera name)
+    render_args = common_args.copy()
+    if args.cam_name is not None:
+        render_args.extend(["--cam_name", args.cam_name])
     
     # Run scripts
     success = True

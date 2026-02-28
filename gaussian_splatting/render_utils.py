@@ -241,15 +241,24 @@ def render_gaussians_lbs(gaussians, ctrl_pts, view, background, n_frames):
     
     return rendered_frames
 
-def save_comparison_video(gt_frames, pred_frames, output_path, fps=30):
-    """Save side-by-side comparison video with ffmpeg transcoding."""
+def save_comparison_video(gt_frames, pred_frames, output_path, fps=30, train_end_rel=None, test_start_rel=None):
+    """Save side-by-side comparison video with ffmpeg transcoding.
+    
+    Args:
+        gt_frames: List of ground truth frames.
+        pred_frames: List of predicted frames.
+        output_path: Path to save the video.
+        fps: Frames per second.
+        train_end_rel: Relative frame index where train split ends (exclusive).
+        test_start_rel: Relative frame index where test split starts (inclusive).
+    """
     if len(gt_frames) == 0:
         return
     h, w, _ = gt_frames[0].shape
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (w * 2, h))
     
-    for gt, pred in zip(gt_frames, pred_frames):
+    for i, (gt, pred) in enumerate(zip(gt_frames, pred_frames)):
         if pred.shape != gt.shape:
             pred = cv2.resize(pred, (w, h))
         
@@ -260,6 +269,19 @@ def save_comparison_video(gt_frames, pred_frames, output_path, fps=30):
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         cv2.putText(pred_bgr, "Prediction", (w // 20, h // 10), 
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        
+        # Add train/test split label
+        if train_end_rel is not None and test_start_rel is not None:
+            if i < train_end_rel:
+                label, color = "TRAIN", (0, 200, 0)
+            elif i >= test_start_rel:
+                label, color = "TEST", (0, 0, 255)
+            else:
+                label, color = "GAP", (200, 200, 0)
+            cv2.putText(pred_bgr, label, (w // 20, h - h // 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+            cv2.putText(gt_bgr, label, (w // 20, h - h // 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
         
         combined = np.hstack((gt_bgr, pred_bgr))
         out.write(combined)

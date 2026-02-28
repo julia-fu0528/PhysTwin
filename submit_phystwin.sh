@@ -65,8 +65,8 @@ cd /oscar/data/gdk/hli230/projects/PhysTwin
 # Run optimization, training, inference and evaluation
 pixi run python script_optimize.py --base_path "\$DATA_PATH" --ep_idx \$EP_IDX --no-gui
 pixi run python script_train.py --base_path "\$DATA_PATH" --ep_idx \$EP_IDX --no-gui
-pixi run python script_inference.py --base_path "\$DATA_PATH" --ep_idx \$EP_IDX
-pixi run python evaluate_all.py --base_path "\$DATA_PATH" --prediction_dir "\$DATA_PATH/experiments" --ep_idx \$EP_IDX
+pixi run python script_inference.py --base_path "\$DATA_PATH" --ep_idx \$EP_IDX --cam_name "brics-odroid-022_cam1"
+pixi run python evaluate_all.py --base_path "\$DATA_PATH" --prediction_dir "\$DATA_PATH/experiments" --ep_idx \$EP_IDX --cam_name "brics-odroid-022_cam1"
 EOT
 
     chmod +x "$job_script"

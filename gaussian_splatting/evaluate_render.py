@@ -47,6 +47,7 @@ from gaussian_splatting.render_utils import calculate_metrics
 
 # Import from root-level modules
 from gs_render import remove_gaussians_with_low_opacity
+from camera_utils import find_camera_index
 
 
 
@@ -289,8 +290,8 @@ def parse_args():
                         help="Path to experiment outputs")
     parser.add_argument("--output_file", type=str, default="results/render_results.csv", 
                         help="Path to output CSV file")
-    parser.add_argument("--cam_idx", type=int, default=0,
-                        help="Camera index to use for evaluation (default: 0, first camera)")
+    parser.add_argument("--cam_name", type=str, default=None,
+                        help="Camera name to use for evaluation (e.g., 'brics-odroid-022_cam1'). Falls back to first camera if not specified or not found.")
     parser.add_argument("--skip_render", action="store_true",
                         help="Skip LBS rendering and use pre-rendered inference.mp4")
     parser.add_argument("--ep_idx", type=int, default=None,
@@ -298,6 +299,7 @@ def parse_args():
     parser.add_argument("--no_wandb", action="store_true",
                         help="Skip WandB logging")
     return parser.parse_args()
+
 
 
 def main():
@@ -348,17 +350,22 @@ def main():
             
             print(f"Split: train={train_range}, test={test_range}, offset={offset}, n_frames={n_frames}")
             
-            # ===== Find Camera Folder =====
+            
+            # ===== Find Camera by Name =====
+            # Use camera_utils to find camera index from name
+            episode_gt_path = f"{base_path}/{case_name}"
+            cam_idx, actual_cam_name = find_camera_index(episode_gt_path, args.cam_name)
+            
             cam_folders = sorted(glob.glob(f"{base_path}/{case_name}/*cam*"))
             if not cam_folders:
                 print(f"No camera folders found for {case_name}")
                 continue
             
-            # Select camera (default: first one or specified index)
-            cam_idx = min(args.cam_idx, len(cam_folders) - 1)
+            # Ensure cam_idx is within bounds
+            cam_idx = min(cam_idx, len(cam_folders) - 1)
             gt_cam_folder = cam_folders[cam_idx]
             cam_name = os.path.basename(gt_cam_folder)
-            print(f"Using camera: {cam_name}")
+            print(f"Using camera: {cam_name} (index {cam_idx})")
             
             # ===== Load GT Video and Mask =====
             gt_video_path = os.path.join(gt_cam_folder, "undistorted.mp4")
