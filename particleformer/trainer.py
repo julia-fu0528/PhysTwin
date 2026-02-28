@@ -656,7 +656,7 @@ class ParticleFormerTrainer:
                 counts["track"] += 1
                 
                 # Render
-                r_res = self.render_metric.evaluate(ep_path, pred_positions, self.epoch)
+                r_res = self.render_metric.evaluate(ep_path, pred_positions, self.epoch, cam_name=self.config.cam_name)
                 for k in ["train/psnr", "train/ssim", "train/lpips", "test/psnr", "test/ssim", "test/lpips"]:
                     if k in r_res:
                         sums[k] += r_res[k]

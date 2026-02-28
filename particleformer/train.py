@@ -77,6 +77,12 @@ def parse_args():
         choices=["episode", "multi-episode"],
         help="Training mode: 'episode' (single ep) or 'multi-episode' (eps 0-3 train, 4 test)",
     )
+    parser.add_argument(
+        "--cam_name",
+        type=str,
+        default=None,
+        help="Camera name for rendering evaluation (e.g., 'brics-odroid-022_cam1'). Falls back to first camera if not specified.",
+    )
     
     # Model arguments
     parser.add_argument(
@@ -263,6 +269,7 @@ def main():
             seed=args.seed,
             resume_from=args.resume_from,
             mode=args.mode,
+            cam_name=args.cam_name,
         )
     
     # Set train and test episodes based on mode

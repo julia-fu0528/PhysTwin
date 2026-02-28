@@ -20,13 +20,14 @@ from gaussian_splatting.render_utils import (
 from gs_render import remove_gaussians_with_low_opacity
 from qqtt.utils.visualize import visualize_pc
 from qqtt.utils.config import cfg as qqtt_cfg
+from camera_utils import find_camera_index
 
 class BaseMetric:
     """Base class for evaluation metrics."""
     def __init__(self, output_dir: str):
         self.output_dir = output_dir
 
-    def evaluate(self, episode_path: str, pred_positions: torch.Tensor, current_epoch: int) -> Dict[str, float]:
+    def evaluate(self, episode_path: str, pred_positions: torch.Tensor, current_epoch: int, **kwargs) -> Dict[str, float]:
         """
         Evaluate metric for a single episode.
         
@@ -198,8 +199,12 @@ class RenderMetric(BaseMetric):
         self.skip_render = skip_render
         
     def evaluate(self, episode_path: str, pred_positions: torch.Tensor, current_epoch: int, **kwargs) -> Dict[str, float]:
-        # Using camera 0 by default
-        cam_idx = 0
+        # Get camera name from kwargs, default to None (which will use first camera)
+        cam_name = kwargs.get('cam_name', None)
+        
+        # Find camera index from name
+        cam_idx, actual_cam_name = find_camera_index(episode_path, cam_name)
+        print(f"Rendering with camera: {actual_cam_name} (index {cam_idx})")
         
         # Load calibration and metadata
         calibrate_path = os.path.join(episode_path, "calibrate.pkl")
@@ -351,13 +356,18 @@ class RenderMetric(BaseMetric):
                 metrics["test/lpips"] = res["lpips"]
         
         # Save comparison video for visualization (Entire rollout)
-        if not self.skip_render:
+        save_results = kwargs.get("save_results", True)
+        if not self.skip_render and save_results:
              save_name = f"epoch_{current_epoch}_{os.path.basename(episode_path)}.mp4"
              save_path = os.path.join(self.output_dir, "vis", save_name)
              os.makedirs(os.path.dirname(save_path), exist_ok=True)
              
-             # Using full frames for visualization
-             save_comparison_video(gt_frames, pred_frames, save_path)
+             # Using full frames for visualization, with train/test labels
+             save_comparison_video(
+                 gt_frames, pred_frames, save_path,
+                 train_end_rel=train_end_rel,
+                 test_start_rel=test_start_rel,
+             )
              metrics["test/comparison_video"] = save_path
              
              # Visualize particles using Pyrender for debug

@@ -57,7 +57,7 @@ module load cuda ffmpeg
 cd /oscar/data/gdk/hli230/projects/PhysTwin
 
 # Run ParticleFormer training
-pixi run python -m particleformer.train --use_wandb --object "${OBJ}" --episode \${EP_IDX}
+pixi run python -m particleformer.train --use_wandb --object "${OBJ}" --episode \${EP_IDX} --cam_name "brics-odroid-022_cam1"
 EOT
 
     chmod +x "$job_script"

@@ -46,6 +46,7 @@ class ParticleFormerConfig:
     mode: str = "episode"  # "episode" or "multi-episode"
     train_episodes: List[int] = field(default_factory=list)
     test_episodes: List[int] = field(default_factory=list)
+    cam_name: Optional[str] = None  # Camera name for rendering evaluation (e.g., 'brics-odroid-022_cam1')
     
     # Logging
     log_interval: int = 10
