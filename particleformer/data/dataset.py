@@ -244,9 +244,11 @@ class MultiObjectDataset(Dataset):
         split_config: Dict[str, Dict[str, List[int]]],
         rollout_steps: int = 5,
         split: str = "train",
+        object_id_map: Optional[Dict[str, int]] = None,
     ):
         self.datasets = []
         self.object_names = []
+        self.object_id_map = object_id_map or {}
         
         for obj_idx, (obj_name, episodes) in enumerate(split_config.items()):
             # For frame-level split, we might want to load the same episodes for both train and test
@@ -256,18 +258,22 @@ class MultiObjectDataset(Dataset):
             episode_key = f"{split}_episodes"
             episode_ids = episodes.get(episode_key, [])
             
-            # If no specific episodes for this split, try train_episodes as fallback
+            # If no specific episodes for this split, choose sensible fallbacks.
             if not episode_ids:
-                episode_ids = episodes.get("train_episodes", [])
+                if split == "all":
+                    episode_ids = episodes.get("test_episodes", []) or episodes.get("train_episodes", [])
+                else:
+                    episode_ids = episodes.get("train_episodes", [])
                 
             if episode_ids:
                 try:
+                    mapped_obj_idx = self.object_id_map.get(obj_name, obj_idx)
                     dataset = ParticleDataset(
                         data_root=data_root,
                         object_name=obj_name,
                         episode_ids=episode_ids,
                         rollout_steps=rollout_steps,
-                        object_id=obj_idx,
+                        object_id=mapped_obj_idx,
                         split=split,
                     )
                     self.datasets.append(dataset)
@@ -353,6 +359,8 @@ def create_dataloader(
     split: str = "train",
     object_name: Optional[str] = None,
     episode_ids: Optional[List[int]] = None,
+    split_config_override: Optional[Dict[str, Dict[str, List[int]]]] = None,
+    object_id_map: Optional[Dict[str, int]] = None,
 ) -> DataLoader:
     """Create a DataLoader from split configuration.
     
@@ -370,9 +378,11 @@ def create_dataloader(
     Returns:
         DataLoader instance.
     """
-    # 1. Try to load split configuration from file if it exists
+    # 1. Prefer explicit split config override, otherwise read split file
     split_config = {}
-    if Path(split_path).exists():
+    if split_config_override is not None:
+        split_config = {"objects": split_config_override}
+    elif Path(split_path).exists():
         with open(split_path, "r") as f:
             split_config = json.load(f)
     
@@ -413,8 +423,20 @@ def create_dataloader(
         episode_key = f"{split}_episodes"
         filtered_config = {}
         for obj_n, obj_config in objects_config.items():
-            if episode_key in obj_config and obj_config[episode_key]:
-                filtered_config[obj_n] = {episode_key: obj_config[episode_key]}
+            selected_key = episode_key
+            selected_episodes = obj_config.get(episode_key, [])
+            if split == "all" and not selected_episodes:
+                # "all" may be requested with override configs that only define
+                # train/test episode lists. Prefer test split, then train split.
+                if obj_config.get("test_episodes"):
+                    selected_key = "test_episodes"
+                    selected_episodes = obj_config["test_episodes"]
+                elif obj_config.get("train_episodes"):
+                    selected_key = "train_episodes"
+                    selected_episodes = obj_config["train_episodes"]
+
+            if selected_episodes:
+                filtered_config[obj_n] = {selected_key: selected_episodes}
         
         if not filtered_config:
             default_obj = split_config.get("default_object")
@@ -437,6 +459,7 @@ def create_dataloader(
         split_config=filtered_config,
         rollout_steps=rollout_steps,
         split=split,
+        object_id_map=object_id_map,
     )
     
     # Create dataloader

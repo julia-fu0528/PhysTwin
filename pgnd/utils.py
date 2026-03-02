@@ -44,7 +44,10 @@ class Logger:
     def __init__(self, cfg, project='deformable_dynamics', entity=None):
         # Extract object_name and ep_idx from config to match ParticleFormer's wandb format
         import os
-        object_name = os.path.basename(str(cfg.train.source_dataset_name)) if cfg.train.source_dataset_name else ""
+        mode = getattr(cfg.train, 'mode', None)
+        object_name = getattr(cfg.train, 'object_name', None)
+        if object_name is None:
+            object_name = os.path.basename(str(cfg.train.source_dataset_name)) if cfg.train.source_dataset_name else ""
         ep_idx = cfg.train.training_start_episode
         
         # If entity is None, wandb will use the default logged-in user's entity
@@ -60,10 +63,14 @@ class Logger:
         config_dict['ep_idx'] = ep_idx
         config_dict['train_episodes'] = list(range(cfg.train.training_start_episode, cfg.train.training_end_episode))
         config_dict['test_episodes'] = list(range(cfg.train.eval_start_episode, cfg.train.eval_end_episode))
-        # Determine mode: multi-episode if train and eval ranges differ
-        is_multi = (cfg.train.training_start_episode != cfg.train.eval_start_episode or
-                    cfg.train.training_end_episode != cfg.train.eval_end_episode)
-        config_dict['mode'] = 'multi-episode' if is_multi else 'episode'
+        if mode is None:
+            # Backward compatible inference when mode isn't explicitly configured.
+            is_multi = (cfg.train.training_start_episode != cfg.train.eval_start_episode or
+                        cfg.train.training_end_episode != cfg.train.eval_end_episode)
+            mode = 'multi-episode' if is_multi else 'episode'
+        config_dict['mode'] = mode
+        config_dict['train_objects'] = list(getattr(cfg.train, 'train_objects', []))
+        config_dict['test_objects'] = list(getattr(cfg.train, 'test_objects', []))
         wandb.config.update(config_dict, allow_val_change=True)
     
     def add_scalar(self, tag, scalar, step=None):

@@ -3,7 +3,11 @@ outputs/
 brics_log/
 hpc_particleformer_log/
 hpc_dynamics_log/
+hpc_render_log/
 hpc_pgnd_log/
+hpc_contact_log/
+pgnd/log/
+wandb_scripts/
 test.py
 wandb/
 experiments/

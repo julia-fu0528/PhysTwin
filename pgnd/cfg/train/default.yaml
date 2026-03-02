@@ -1,6 +1,10 @@
 name: null
 dataset_name: null
 source_dataset_name: null
+mode: episode
+object_name: null
+train_objects: []
+test_objects: []
 
 num_iterations: 10000
 resume_iteration: 0

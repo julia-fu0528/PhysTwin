@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Union, Optional
+from typing import Union, Optional, List
 from omegaconf import DictConfig
 
 import os
@@ -34,6 +34,9 @@ def preprocess_phystwin(cfg, dataset_root_episode, source_data_root_episode, dt_
     If save=False, returns (True, states_list) instead of just True.
     """
     save = kwargs.get('save', True)
+    def fail_ret():
+        return False if save else (False, None, None)
+
     if save:
         print('Preprocessing episode (PhysTwin format):', dataset_root_episode.name)
     else:
@@ -43,7 +46,7 @@ def preprocess_phystwin(cfg, dataset_root_episode, source_data_root_episode, dt_
     final_data_path = source_data_root_episode / 'final_data.pkl'
     if not final_data_path.exists():
         print(f'final_data.pkl not found in {source_data_root_episode}')
-        return False
+        return fail_ret()
     
     with open(final_data_path, 'rb') as f:
         data = pkl.load(f)
@@ -90,6 +93,9 @@ def preprocess_phystwin(cfg, dataset_root_episode, source_data_root_episode, dt_
             openings = openings[raw_offset:total_end]
     
     xyz = object_points  # (n_frames, n_particles, 3)
+    if xyz.ndim != 3 or xyz.shape[0] == 0 or xyz.shape[1] == 0:
+        print(f'{source_data_root_episode.name} has empty object_points after split, skipping...')
+        return fail_ret()
     n_frames = xyz.shape[0]
     
     # Determine number of grippers
@@ -124,7 +130,34 @@ def preprocess_phystwin(cfg, dataset_root_episode, source_data_root_episode, dt_
             eef_quat = np.tile(eef_quat, (1, num_grippers, 1))
     else:
         print('No gripper data available')
-        return False
+        return fail_ret()
+
+    # Align frame counts across object/gripper streams.
+    # Some episodes have robot trajectories a few frames longer than object_points.
+    aligned_n_frames = min(n_frames, eef_xyz.shape[0], eef_quat.shape[0])
+    if openings is not None:
+        aligned_n_frames = min(aligned_n_frames, openings.shape[0])
+    if controller_points is not None:
+        aligned_n_frames = min(aligned_n_frames, controller_points.shape[0])
+
+    if aligned_n_frames < 2:
+        print(f'{source_data_root_episode.name} has too few aligned frames ({aligned_n_frames}), skipping...')
+        return fail_ret()
+
+    if aligned_n_frames != n_frames:
+        print(
+            f'{source_data_root_episode.name} frame mismatch: '
+            f'object={n_frames}, gripper_pos={eef_xyz.shape[0]}, gripper_quat={eef_quat.shape[0]} '
+            f'-> using {aligned_n_frames} frames'
+        )
+    n_frames = aligned_n_frames
+    xyz = xyz[:n_frames]
+    eef_xyz = eef_xyz[:n_frames]
+    eef_quat = eef_quat[:n_frames]
+    if openings is not None:
+        openings = openings[:n_frames]
+    if controller_points is not None:
+        controller_points = controller_points[:n_frames]
     
     # Scale data
     scale = cfg.sim.preprocess_scale
@@ -417,6 +450,7 @@ class RealTeleopBatchDataset(Dataset):
                 num_steps: int, 
                 train: bool = False, 
                 eval_episode_name: Optional[str] = None, 
+                episode_paths: Optional[List[Union[str, Path]]] = None,
                 dataset_non_overwrite: bool = False,
                 save_dataset: bool = True
         ) -> None:
@@ -444,7 +478,10 @@ class RealTeleopBatchDataset(Dataset):
 
         with torch.no_grad():
             source_data_root = Path(source_data_root).resolve()
-            episodes = list(sorted(Path(str(source_data_root)).glob('episode_*')))
+            if episode_paths is not None:
+                episodes = [Path(p).resolve() for p in episode_paths]
+            else:
+                episodes = list(sorted(Path(str(source_data_root)).glob('episode_*')))
             if len(episodes) == 0:
                 import ipdb; ipdb.set_trace()
             if eval_episode_name is not None:
@@ -469,7 +506,12 @@ class RealTeleopBatchDataset(Dataset):
 
             for episode_id in range(len(episodes)):
                 source_data_root_episode = episodes[episode_id]
-                episode_name = source_data_root_episode.name
+                if episode_paths is not None:
+                    # Keep episode cache directory unique across objects in multi-object mode.
+                    object_name = source_data_root_episode.parent.name
+                    episode_name = f"{object_name}__{source_data_root_episode.name}"
+                else:
+                    episode_name = source_data_root_episode.name
                 dataset_root_episode = dataset_root / episode_name
                 
                 states = [] # Initialize states for in-memory processing
@@ -615,15 +657,31 @@ class RealTeleopBatchDataset(Dataset):
         enabled = self.episode_enabled[episode]
 
         # downsample
+        num_enabled = int(enabled.sum().item())
+        if num_enabled <= 0:
+            raise RuntimeError("No enabled particles found for sampling.")
+
+        sample_k = min(self.n_particles, num_enabled)
         if self.uniform:
-            downsample_indices = fps(x, enabled, self.n_particles, self.device, random_start=True)
+            downsample_indices = fps(x, enabled, sample_k, self.device, random_start=True)
         else:
-            downsample_indices = torch.randperm(enabled.sum())[:self.n_particles]
+            downsample_indices = torch.randperm(num_enabled)[:sample_k]
+
+        # Ensure fixed-size output for DataLoader collation.
+        if sample_k < self.n_particles:
+            pad_idx = downsample_indices[torch.randint(
+                low=0, high=sample_k, size=(self.n_particles - sample_k,)
+            )]
+            downsample_indices = torch.cat([downsample_indices, pad_idx], dim=0)
+
+        downsample_indices = downsample_indices.long().contiguous()
         x = x[downsample_indices]
         v = v[downsample_indices]
 
-        x_his = torch.zeros((self.n_particles, 0), dtype=x.dtype, device=x.device)
-        v_his = torch.zeros((self.n_particles, 0), dtype=v.dtype, device=v.device)
+        # History tensors store flattened xyz history: (n_particles, 3 * n_history_so_far)
+        # so seed with shape (n_particles, 0, 3) for safe concatenation on last dim.
+        x_his = torch.zeros((x.shape[0], 0, 3), dtype=x.dtype, device=x.device)
+        v_his = torch.zeros((v.shape[0], 0, 3), dtype=v.dtype, device=v.device)
         for his_id in range(-self.n_history, 0):
             his_frame = frame + his_id * self.skip_frame
             assert his_frame >= 0
@@ -631,12 +689,22 @@ class RealTeleopBatchDataset(Dataset):
             v_his_frame = self.episode_vs[episode][his_frame]
             x_his_frame = x_his_frame[downsample_indices]
             v_his_frame = v_his_frame[downsample_indices]
-            x_his = torch.cat([x_his, x_his_frame], dim=-1)
-            v_his = torch.cat([v_his, v_his_frame], dim=-1)
+            x_his = torch.cat([x_his, x_his_frame[:, None, :]], dim=1)
+            v_his = torch.cat([v_his, v_his_frame[:, None, :]], dim=1)
+        x_his = x_his.reshape(x.shape[0], -1)
+        v_his = v_his.reshape(v.shape[0], -1)
 
         enabled = torch.ones(x.size(0), dtype=torch.bool)
         clip_bound = self.episode_clip_bound[episode]
         episode_vec = torch.tensor([episode, frame])
+        # Ensure tensors handed to DataLoader collation own contiguous storage.
+        x = x.contiguous()
+        v = v.contiguous()
+        x_his = x_his.contiguous()
+        v_his = v_his.contiguous()
+        clip_bound = clip_bound.contiguous()
+        enabled = enabled.contiguous()
+        episode_vec = episode_vec.contiguous()
         init_state = (x, v, x_his, v_his, clip_bound, enabled, episode_vec)
 
         end_frame = frame + self.num_steps * self.skip_frame + 1
@@ -648,6 +716,9 @@ class RealTeleopBatchDataset(Dataset):
         
         gt_xs = gt_xs[:, downsample_indices]
         gt_vs = gt_vs[:, downsample_indices]
+        actions = actions.contiguous()
+        gt_xs = gt_xs.contiguous()
+        gt_vs = gt_vs.contiguous()
         
         gt_states = (gt_xs, gt_vs)
 

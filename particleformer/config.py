@@ -43,9 +43,11 @@ class ParticleFormerConfig:
     split_json: str = "split.json"
     object_name: str = "001-rope"
     ep_idx: int = 0
-    mode: str = "episode"  # "episode" or "multi-episode"
+    mode: str = "episode"  # "episode", "multi-episode", or "multi-object"
     train_episodes: List[int] = field(default_factory=list)
     test_episodes: List[int] = field(default_factory=list)
+    train_objects: List[str] = field(default_factory=list)
+    test_objects: List[str] = field(default_factory=list)
     cam_name: Optional[str] = None  # Camera name for rendering evaluation (e.g., 'brics-odroid-022_cam1')
     
     # Logging

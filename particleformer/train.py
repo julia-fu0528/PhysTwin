@@ -29,6 +29,30 @@ from .config import ParticleFormerConfig
 from .trainer import ParticleFormerTrainer
 from .data import create_dataloader
 
+ALL_OBJECTS = [
+    "002-rope-silk", "003-cable", "004-rubber-band", "001-rope",
+    "006-fur", "008-pink-cloth", "010-orange-cloth", "011-green-cloth",
+    "012-hat-cloth", "013-glove-cloth", "016-shirt-cloth",
+    "015-airbag-cloth", "017-chessboard-cloth", "018-trashbag-cloth",
+    "019-trashbag-plastic-cloth", "021-bag-cloth", "022-handkerchief",
+    "024-glass-cleaner-cloth", "023-cleaning-cloth",
+    "025-bag-small-cloth", "027-umbrella-bag-cloth", "026-sock-cloth",
+    "030-foam-flat-cloth", "029-foam-cloth", "038-mat-cloth",
+    "040-paper-cloth", "043-dog", "045-cat", "046-sponge",
+    "048-butter-sponge", "059-shoe", "062-banana", "063-flower",
+    "068-nylon-rope", "082-curtain-cloth", "088-snake", "090-sloth",
+    "092-squirrel", "096-octopus", "100-puppet", "095-watermelon",
+    "103-ice-pack-cloth", "109-pouch-cloth", "110-shower-cap-cloth",
+    "113-collar", "115-cotton-gauze-cloth", "120-bread-plush",
+    "118-envelope-cloth", "117-bubble-wrap-cloth",
+    "121-croissant-plush", "125-rabbit", "135-makeup-sponge",
+    "147-baking-mold", "148-crepe-paper-cloth",
+    "156-mesh-produce-bag-cloth", "150-shredded-packing-paper-cloth",
+    "157-sack-cloth", "159-purse", "163-bear", "164-sheep",
+]
+TEST_OBJECTS = {"003-cable", "045-cat", "059-shoe", "117-bubble-wrap-cloth", "159-purse"}
+TRAIN_OBJECTS = [obj for obj in ALL_OBJECTS if obj not in TEST_OBJECTS]
+
 
 def parse_args():
     """Parse command line arguments."""
@@ -74,8 +98,8 @@ def parse_args():
         "--mode",
         type=str,
         default="episode",
-        choices=["episode", "multi-episode"],
-        help="Training mode: 'episode' (single ep) or 'multi-episode' (eps 0-3 train, 4 test)",
+        choices=["episode", "multi-episode", "multi-object"],
+        help="Training mode: 'episode', 'multi-episode', or 'multi-object' (cross-object generalization).",
     )
     parser.add_argument(
         "--cam_name",
@@ -229,7 +253,10 @@ def main():
     
     # Update output_dir if not provided
     if args.output_dir is None:
-        args.output_dir = os.path.join("outputs/particleformer", f"{args.object}_ep{args.episode}")
+        if args.mode == "multi-object":
+            args.output_dir = os.path.join("outputs/particleformer", "multi_object")
+        else:
+            args.output_dir = os.path.join("outputs/particleformer", f"{args.object}_ep{args.episode}")
     
     # Load or create config
     if args.config is not None:
@@ -273,6 +300,9 @@ def main():
         )
     
     # Set train and test episodes based on mode
+    object_id_map = None
+    split_config_override = None
+
     if config.mode == "multi-episode":
         all_candidates = [0, 1, 2, 3, 4]
         existing_episodes = []
@@ -303,6 +333,57 @@ def main():
         if not config.train_episodes:
             print(f"Warning: Only one episode ({test_ep}) found in range 0-4. Using it for both training and testing.")
             config.train_episodes = [test_ep]
+    elif config.mode == "multi-object":
+        existing_train_objects = []
+        existing_test_objects = []
+        split_config_override = {}
+
+        for obj_name in ALL_OBJECTS:
+            obj_dir = Path(config.data_root) / obj_name
+            if not obj_dir.is_dir():
+                continue
+
+            episode_ids = []
+            for ep_id in [0, 1, 2, 3, 4]:
+                ep_path = obj_dir / f"episode_{ep_id}" / "final_data.pkl"
+                if not ep_path.exists():
+                    continue
+                try:
+                    with open(ep_path, "rb") as f:
+                        data = pickle.load(f)
+                    if data["object_points"].shape[0] > config.rollout_steps:
+                        episode_ids.append(ep_id)
+                except Exception as e:
+                    print(f"Warning: Could not read {ep_path}: {e}. Skipping.")
+
+            if not episode_ids:
+                continue
+
+            split_config_override[obj_name] = {
+                "train_episodes": episode_ids,
+                "test_episodes": episode_ids,
+            }
+
+            if obj_name in TEST_OBJECTS:
+                existing_test_objects.append(obj_name)
+            else:
+                existing_train_objects.append(obj_name)
+
+        if not existing_train_objects:
+            raise ValueError(f"No valid training objects found under {config.data_root}")
+        if not existing_test_objects:
+            raise ValueError(f"No valid testing objects found under {config.data_root}")
+
+        # Keep these fields for wandb consistency and checkpoint naming.
+        config.object_name = "multi-object"
+        config.train_objects = existing_train_objects
+        config.test_objects = existing_test_objects
+        config.train_episodes = []
+        config.test_episodes = []
+        config.num_objects = len(existing_train_objects) + len(existing_test_objects)
+
+        # Use a global object-id map so test objects keep unique unseen IDs.
+        object_id_map = {name: idx for idx, name in enumerate(existing_train_objects + existing_test_objects)}
     else:
         config.train_episodes = [args.episode]
         config.test_episodes = [args.episode]
@@ -316,8 +397,8 @@ def main():
     # Create dataloaders
     print("Creating dataloaders...")
     
-    # In multi-episode mode, we use the whole test episode for validation
-    val_split = "all" if config.mode == "multi-episode" else "test"
+    # In multi-episode and multi-object mode, use the full episode for validation rollouts.
+    val_split = "all" if config.mode in {"multi-episode", "multi-object"} else "test"
     
     # Make split_json path relative to workspace if not absolute
     split_path = Path(args.split_json)
@@ -328,29 +409,57 @@ def main():
             phystwin_dir = Path(__file__).parent.parent
             split_path = phystwin_dir / args.split_json
     
-    train_dataloader = create_dataloader(
-        data_root=config.data_root,
-        split_path=str(split_path),
-        batch_size=config.batch_size,
-        rollout_steps=config.rollout_steps,
-        num_workers=args.num_workers,
-        shuffle=True,
-        split="train",
-        object_name=config.object_name,
-        episode_ids=config.train_episodes,
-    )
-    
-    val_dataloader = create_dataloader(
-        data_root=config.data_root,
-        split_path=str(split_path),
-        batch_size=config.batch_size,
-        rollout_steps=config.rollout_steps,
-        num_workers=args.num_workers,
-        shuffle=False,
-        split=val_split,
-        object_name=config.object_name,
-        episode_ids=config.test_episodes,
-    )
+    if config.mode == "multi-object":
+        train_split_config = {k: v for k, v in split_config_override.items() if k in set(config.train_objects)}
+        test_split_config = {k: v for k, v in split_config_override.items() if k in set(config.test_objects)}
+
+        train_dataloader = create_dataloader(
+            data_root=config.data_root,
+            split_path=str(split_path),
+            batch_size=config.batch_size,
+            rollout_steps=config.rollout_steps,
+            num_workers=args.num_workers,
+            shuffle=True,
+            split="train",
+            split_config_override=train_split_config,
+            object_id_map=object_id_map,
+        )
+
+        val_dataloader = create_dataloader(
+            data_root=config.data_root,
+            split_path=str(split_path),
+            batch_size=config.batch_size,
+            rollout_steps=config.rollout_steps,
+            num_workers=args.num_workers,
+            shuffle=False,
+            split=val_split,
+            split_config_override=test_split_config,
+            object_id_map=object_id_map,
+        )
+    else:
+        train_dataloader = create_dataloader(
+            data_root=config.data_root,
+            split_path=str(split_path),
+            batch_size=config.batch_size,
+            rollout_steps=config.rollout_steps,
+            num_workers=args.num_workers,
+            shuffle=True,
+            split="train",
+            object_name=config.object_name,
+            episode_ids=config.train_episodes,
+        )
+        
+        val_dataloader = create_dataloader(
+            data_root=config.data_root,
+            split_path=str(split_path),
+            batch_size=config.batch_size,
+            rollout_steps=config.rollout_steps,
+            num_workers=args.num_workers,
+            shuffle=False,
+            split=val_split,
+            object_name=config.object_name,
+            episode_ids=config.test_episodes,
+        )
     
     print(f"Training samples: {len(train_dataloader.dataset)}")
     print(f"Validation samples: {len(val_dataloader.dataset)}")
@@ -367,9 +476,12 @@ def main():
     # Cleanup output directory after training
     if trainer.accelerator.is_main_process:
         # Save final checkpoint with custom name to data_root/object
-        ep_suffix = "_".join(map(str, config.train_episodes))
-        final_ckpt_name = f"train_ep_{ep_suffix}.ckpt"
-        final_ckpt_path = Path(config.data_root) / config.object_name / final_ckpt_name
+        if config.mode == "multi-object":
+            final_ckpt_path = Path(config.data_root) / "particleformer_multi_object.ckpt"
+        else:
+            ep_suffix = "_".join(map(str, config.train_episodes))
+            final_ckpt_name = f"train_ep_{ep_suffix}.ckpt"
+            final_ckpt_path = Path(config.data_root) / config.object_name / final_ckpt_name
         
         print(f"Saving final checkpoint to {final_ckpt_path}...")
         final_ckpt_path.parent.mkdir(parents=True, exist_ok=True)

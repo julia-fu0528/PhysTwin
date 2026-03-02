@@ -127,6 +127,8 @@ class ParticleFormerTrainer:
             if config.mode == "multi-episode":
                 ep_range = "_".join(map(str, config.train_episodes))
                 run_name = f"{config.object_name}_multi_ep_{ep_range}"
+            elif config.mode == "multi-object":
+                run_name = f"multi_object_train{len(config.train_objects)}_test{len(config.test_objects)}"
             else:
                 run_name = f"{config.object_name}_ep_{config.ep_idx}"
                 
@@ -139,6 +141,8 @@ class ParticleFormerTrainer:
                     "mode": config.mode,
                     "train_episodes": config.train_episodes,
                     "test_episodes": config.test_episodes,
+                    "train_objects": config.train_objects,
+                    "test_objects": config.test_objects,
                     **config.__dict__
                 },
                 init_kwargs={
@@ -198,11 +202,21 @@ class ParticleFormerTrainer:
             
             # Log epoch metrics
             self.log(f"Epoch {epoch}: {train_metrics}")
+            if config.use_wandb:
+                self.accelerator.log(
+                    {f"train_epoch/{k}": v for k, v in train_metrics.items()},
+                    step=self.global_step,
+                )
             
             # Evaluation
             if eval_dataloader is not None and (epoch + 1) % config.eval_interval == 0:
                 eval_metrics = self._eval_epoch(eval_dataloader)
                 self.log(f"Eval: {eval_metrics}")
+                if config.use_wandb:
+                    self.accelerator.log(
+                        {f"eval/{k}": v for k, v in eval_metrics.items()},
+                        step=self.global_step,
+                    )
                 
                 # Save best model
                 if eval_metrics.get("loss", float('inf')) < self.best_loss:
@@ -222,7 +236,7 @@ class ParticleFormerTrainer:
              final_metrics = self._eval_full_rollout(eval_dataloader)
              self.log(f"Final Metrics: {final_metrics}")
              if config.use_wandb:
-                 self.accelerator.log(final_metrics)
+                 self.accelerator.log(final_metrics, step=self.global_step)
 
         if config.use_wandb:
             self.accelerator.end_training()
@@ -268,6 +282,16 @@ class ParticleFormerTrainer:
                     f"hd={metrics['hausdorff_distance']:.6f}, "
                     f"lr={lr:.2e}"
                 )
+                if self.config.use_wandb:
+                    self.accelerator.log(
+                        {
+                            "train/loss": metrics["loss"],
+                            "train/chamfer_distance": metrics["chamfer_distance"],
+                            "train/hausdorff_distance": metrics["hausdorff_distance"],
+                            "train/lr": lr,
+                        },
+                        step=self.global_step,
+                    )
         
         return {
             "loss": total_loss / num_batches,
@@ -718,5 +742,3 @@ def train_from_config(config_path: str):
     # Create trainer and train
     trainer = ParticleFormerTrainer(config)
     trainer.train(train_dataloader, val_dataloader)
-
-

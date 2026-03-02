@@ -13,6 +13,7 @@ from pathlib import Path
 import random
 import time
 import os
+from typing import Dict, List
 import matplotlib.pyplot as plt
 from collections import defaultdict
 from tqdm import tqdm, trange
@@ -40,6 +41,30 @@ from particleformer.metrics import ChamferMetric, TrackMetric, RenderMetric
 
 
 root: Path = Path(__file__).parent.resolve()
+
+ALL_OBJECTS = [
+    "002-rope-silk", "003-cable", "004-rubber-band", "001-rope",
+    "006-fur", "008-pink-cloth", "010-orange-cloth", "011-green-cloth",
+    "012-hat-cloth", "013-glove-cloth", "016-shirt-cloth",
+    "015-airbag-cloth", "017-chessboard-cloth", "018-trashbag-cloth",
+    "019-trashbag-plastic-cloth", "021-bag-cloth", "022-handkerchief",
+    "024-glass-cleaner-cloth", "023-cleaning-cloth",
+    "025-bag-small-cloth", "027-umbrella-bag-cloth", "026-sock-cloth",
+    "030-foam-flat-cloth", "029-foam-cloth", "038-mat-cloth",
+    "040-paper-cloth", "043-dog", "045-cat", "046-sponge",
+    "048-butter-sponge", "059-shoe", "062-banana", "063-flower",
+    "068-nylon-rope", "082-curtain-cloth", "088-snake", "090-sloth",
+    "092-squirrel", "096-octopus", "100-puppet", "095-watermelon",
+    "103-ice-pack-cloth", "109-pouch-cloth", "110-shower-cap-cloth",
+    "113-collar", "115-cotton-gauze-cloth", "120-bread-plush",
+    "118-envelope-cloth", "117-bubble-wrap-cloth",
+    "121-croissant-plush", "125-rabbit", "135-makeup-sponge",
+    "147-baking-mold", "148-crepe-paper-cloth",
+    "156-mesh-produce-bag-cloth", "150-shredded-packing-paper-cloth",
+    "157-sack-cloth", "159-purse", "163-bear", "164-sheep",
+]
+TEST_OBJECTS = {"003-cable", "045-cat", "059-shoe", "117-bubble-wrap-cloth", "159-purse"}
+TRAIN_OBJECTS = [obj for obj in ALL_OBJECTS if obj not in TEST_OBJECTS]
 
 
 def dataloader_wrapper(dataloader, name):
@@ -146,6 +171,9 @@ class Trainer:
         
         assert self.cfg.train.source_dataset_name is not None
         self.use_gs = cfg.train.use_gs
+        self.mode = getattr(cfg.train, "mode", "episode")
+        self.train_episode_specs: List[Dict] = []
+        self.eval_episode_specs: List[Dict] = []
 
         # logging
         self.verbose = False
@@ -170,6 +198,76 @@ class Trainer:
         self.cam_name = getattr(cfg.train, 'cam_name', None)
         self.save_dataset = getattr(cfg.train, 'save_dataset', True)
 
+    @staticmethod
+    def _parse_episode_id(episode_dir: Path) -> int:
+        ep_name = episode_dir.name
+        if not ep_name.startswith("episode_"):
+            return -1
+        ep_str = ep_name.replace("episode_", "")
+        try:
+            return int(ep_str)
+        except ValueError:
+            return -1
+
+    def _discover_object_episode_specs(self, source_root: Path, object_names: List[str]) -> List[Dict]:
+        specs: List[Dict] = []
+        for obj_name in object_names:
+            obj_root = source_root / obj_name
+            if not obj_root.is_dir():
+                continue
+            for ep_dir in sorted(obj_root.glob("episode_*")):
+                if not ep_dir.is_dir():
+                    continue
+                ep_id = self._parse_episode_id(ep_dir)
+                if ep_id < 0:
+                    continue
+                if ep_id > 4:
+                    # Keep multi-object training aligned with 5-episode protocol.
+                    continue
+                if not (ep_dir / "final_data.pkl").exists():
+                    continue
+                specs.append({
+                    "object_name": obj_name,
+                    "episode_id": ep_id,
+                    "episode_name": ep_dir.name,
+                    "episode_path": ep_dir,
+                })
+        return specs
+
+    def _build_multi_object_splits(self, source_root: Path) -> None:
+        cfg = self.cfg
+        train_objects = list(getattr(cfg.train, "train_objects", [])) or list(TRAIN_OBJECTS)
+        test_objects = list(getattr(cfg.train, "test_objects", [])) or [obj for obj in ALL_OBJECTS if obj in TEST_OBJECTS]
+
+        self.train_episode_specs = self._discover_object_episode_specs(source_root, train_objects)
+        self.eval_episode_specs = self._discover_object_episode_specs(source_root, test_objects)
+
+        available_train_objects = sorted({s["object_name"] for s in self.train_episode_specs})
+        available_test_objects = sorted({s["object_name"] for s in self.eval_episode_specs})
+
+        if len(self.train_episode_specs) == 0:
+            raise ValueError(f"No training episodes found for multi-object mode at {source_root}")
+        if len(self.eval_episode_specs) == 0:
+            raise ValueError(f"No testing episodes found for multi-object mode at {source_root}")
+
+        cfg.train.mode = "multi-object"
+        cfg.train.object_name = "multi-object"
+        cfg.train.train_objects = available_train_objects
+        cfg.train.test_objects = available_test_objects
+        # Keep legacy fields coherent for logging.
+        cfg.train.training_start_episode = 0
+        cfg.train.training_end_episode = len(self.train_episode_specs)
+        cfg.train.eval_start_episode = 0
+        cfg.train.eval_end_episode = len(self.eval_episode_specs)
+
+        print(
+            f"Multi-object split: {len(available_train_objects)} train objects "
+            f"({len(self.train_episode_specs)} episodes), "
+            f"{len(available_test_objects)} test objects "
+            f"({len(self.eval_episode_specs)} episodes)"
+        )
+        print("Multi-object episode range: using episode IDs in [0, 4].")
+
     def load_train_dataset(self):
         """Load training dataset."""
         cfg = self.cfg
@@ -179,6 +277,17 @@ class Trainer:
         source_dataset_root = self.log_root / str(cfg.train.source_dataset_name)
         assert os.path.exists(source_dataset_root)
 
+        if self.mode == "multi-object":
+            self._build_multi_object_splits(source_dataset_root)
+            train_episode_paths = [spec["episode_path"] for spec in self.train_episode_specs]
+            # Multi-object in-memory tensors can trigger worker-side collation/storage issues.
+            # Use single-process data loading for stability.
+            if cfg.train.num_workers != 0:
+                print(f"Multi-object mode: overriding train.num_workers from {cfg.train.num_workers} to 0 for stable collation.")
+                cfg.train.num_workers = 0
+        else:
+            train_episode_paths = None
+
         dataset = RealTeleopBatchDataset(
             cfg, 
             dataset_root=self.log_root / cfg.train.dataset_name / 'state',
@@ -186,6 +295,7 @@ class Trainer:
             device=self.torch_device,
             num_steps=cfg.sim.num_steps_train,
             train=True,
+            episode_paths=train_episode_paths,
             dataset_non_overwrite=self.dataset_non_overwrite,
             save_dataset=self.save_dataset,
         )
@@ -444,16 +554,38 @@ class Trainer:
             if self.material_requires_grad:
                 self.material_lr_scheduler.step()
 
-    def eval_episode(self, iteration: int, episode: int, save: bool = True):
+    def eval_episode(self, iteration: int, episode_spec, save: bool = True):
         """Evaluate a single episode with Chamfer, Track, and Render metrics."""
         cfg = self.cfg
 
         log_root: Path = root / 'log'
         dataset_name = str(cfg.train.dataset_name) if cfg.train.dataset_name else ""
+        if isinstance(episode_spec, dict):
+            episode = episode_spec["episode_id"]
+            episode_path = Path(episode_spec["episode_path"])
+            episode_name_for_dataset = episode_spec["episode_name"]
+            object_name = episode_spec.get("object_name", "")
+            episode_label = f"{object_name}/{episode_name_for_dataset}" if object_name else episode_name_for_dataset
+            episode_state_tag = f"{object_name}__{episode_name_for_dataset}" if object_name else episode_name_for_dataset
+            source_data_root = episode_path.parent
+        else:
+            episode = int(episode_spec)
+            source_dataset_root = self.log_root / str(cfg.train.source_dataset_name)
+            # Get the episode path for metrics evaluation - try both naming conventions
+            episode_path = source_dataset_root / f'episode_{episode}'
+            episode_name_for_dataset = f'episode_{episode}'
+            if not episode_path.exists():
+                episode_path = source_dataset_root / f'episode_{episode:04d}'
+                episode_name_for_dataset = f'episode_{episode:04d}'
+            object_name = source_dataset_root.name
+            episode_label = f"{object_name}/{episode_name_for_dataset}"
+            episode_state_tag = f"episode_{episode:04d}"
+            source_data_root = source_dataset_root
+
         if self.save and save:
             state_root: Path = self.exp_root / 'state'
             mkdir(state_root, overwrite=cfg.overwrite, resume=cfg.resume)
-            episode_state_root = state_root / f'episode_{episode:04d}'
+            episode_state_root = state_root / episode_state_tag
             mkdir(episode_state_root, overwrite=cfg.overwrite, resume=cfg.resume)
             OmegaConf.save(cfg, self.exp_root / 'hydra.yaml', resolve=True)
 
@@ -461,27 +593,18 @@ class Trainer:
             cfg.train.dataset_name = Path(cfg.train.name).parent / 'dataset'
         assert cfg.train.source_dataset_name is not None
 
-        source_dataset_root = self.log_root / str(cfg.train.source_dataset_name)
-        assert os.path.exists(source_dataset_root)
-        
-        # Get the episode path for metrics evaluation - try both naming conventions
-        episode_path = source_dataset_root / f'episode_{episode}'
-        episode_name_for_dataset = f'episode_{episode}'
         if not episode_path.exists():
-            episode_path = source_dataset_root / f'episode_{episode:04d}'
-            episode_name_for_dataset = f'episode_{episode:04d}'
-        
-        if not episode_path.exists():
-            print(f"Episode {episode} not found at {source_dataset_root}")
+            print(f"Episode {episode_label} not found at {source_data_root}")
             return {}
         
         eval_dataset = RealTeleopBatchDataset(
             cfg, 
             dataset_root=self.log_root / cfg.train.dataset_name / 'state',
-            source_data_root=source_dataset_root,
+            source_data_root=source_data_root,
             device=self.torch_device,
             num_steps=self.cfg.sim.num_steps,
             eval_episode_name=episode_name_for_dataset,
+            episode_paths=[episode_path],
             save_dataset=False,
         )
         eval_dataloader = dataloader_wrapper(
@@ -540,7 +663,7 @@ class Trainer:
         pred_positions_list = [x[0].clone()]  # Initial position
         
         with torch.no_grad():
-            for step in trange(num_steps_total, desc=f"Eval episode {episode}"):
+            for step in trange(num_steps_total, desc=f"Eval {episode_label}"):
                 if num_grippers > 0:
                     colliders.update_grippers(actions[:, step])
                 if cfg.sim.gripper_forcing:
@@ -654,7 +777,7 @@ class Trainer:
                 pred_positions_world = torch.from_numpy(pred_positions_world).float().to(self.torch_device)
                 
                 # Compute metrics
-                print(f"\nComputing metrics for episode {episode}...")
+                print(f"\nComputing metrics for {episode_label}...")
                 
                 # Chamfer metric
                 chamfer_results = self.chamfer_metric.evaluate(
@@ -708,7 +831,7 @@ class Trainer:
                 print(f"Warning: final_data.pkl not found at {final_data_path}, skipping metrics")
                 
         except Exception as e:
-            print(f"Error computing metrics for episode {episode}: {e}")
+            print(f"Error computing metrics for {episode_label}: {e}")
             import traceback
             traceback.print_exc()
 
@@ -719,7 +842,7 @@ class Trainer:
                 plt.plot(loss_list)
                 plt.title(loss_k)
                 plt.grid()
-                plt.savefig(state_root / f'episode_{episode:04d}_{loss_k}.png', dpi=300)
+                plt.savefig(state_root / f'{episode_state_tag}_{loss_k}.png', dpi=300)
                 plt.close()
 
         return metrics
@@ -729,10 +852,16 @@ class Trainer:
         cfg = self.cfg
 
         metrics_list = []
-        start_episode = cfg.train.eval_start_episode
-        # Always respect the configured end_episode, but limit to 1 episode when save=False (quick test)
-        end_episode = cfg.train.eval_end_episode if save else min(cfg.train.eval_start_episode + 1, cfg.train.eval_end_episode)
-        for episode in range(start_episode, end_episode):
+        if self.mode == "multi-object":
+            eval_targets = self.eval_episode_specs
+            if not save:
+                eval_targets = eval_targets[:1]
+        else:
+            start_episode = cfg.train.eval_start_episode
+            end_episode = cfg.train.eval_end_episode if save else min(cfg.train.eval_start_episode + 1, cfg.train.eval_end_episode)
+            eval_targets = list(range(start_episode, end_episode))
+
+        for episode in eval_targets:
             try:
                 metrics = self.eval_episode(eval_iteration, episode, save=save)
                 if metrics:
@@ -808,17 +937,20 @@ def main(cfg: DictConfig):
     # Save final checkpoint to source dataset directory (matching ParticleFormer convention)
     source_dataset_name = str(cfg.train.source_dataset_name)
     source_path = Path(source_dataset_name)
-    start_ep = cfg.train.training_start_episode
-    end_ep = cfg.train.training_end_episode
-    # Discover which episodes actually exist in the training range
-    train_ep_indices = []
-    for ep_i in range(start_ep, end_ep):
-        if (source_path / f'episode_{ep_i}').exists():
-            train_ep_indices.append(str(ep_i))
-    if not train_ep_indices:
-        train_ep_indices = [str(start_ep)]
-    ep_suffix = "_".join(train_ep_indices)
-    final_ckpt_path = source_path / f'pgnd_ep_{ep_suffix}.ckpt'
+    if getattr(cfg.train, "mode", "episode") == "multi-object":
+        final_ckpt_path = source_path / "pgnd_multi_object.ckpt"
+    else:
+        start_ep = cfg.train.training_start_episode
+        end_ep = cfg.train.training_end_episode
+        # Discover which episodes actually exist in the training range
+        train_ep_indices = []
+        for ep_i in range(start_ep, end_ep):
+            if (source_path / f'episode_{ep_i}').exists():
+                train_ep_indices.append(str(ep_i))
+        if not train_ep_indices:
+            train_ep_indices = [str(start_ep)]
+        ep_suffix = "_".join(train_ep_indices)
+        final_ckpt_path = source_path / f'pgnd_ep_{ep_suffix}.ckpt'
     final_ckpt_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({'material': trainer.material.state_dict()}, final_ckpt_path)
     print(f'Saved final checkpoint to {final_ckpt_path}')
